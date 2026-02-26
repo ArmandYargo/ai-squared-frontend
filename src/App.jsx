@@ -15,21 +15,35 @@ import {
   ChevronDown,
 } from "lucide-react";
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
+function timeNow() {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 export default function AISquaredChatUIStarter() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([
     {
       role: "assistant",
-      text: "Hi — I’m your AI Squared assistant. I can help with engineering workflows, calculations, and document-based Q&A once your backend is connected.",
-      time: "09:41",
+      text: "Hi — I’m your AI Squared assistant. I can help with engineering workflows, RAM wizard steps, and document-based Q&A once your backend is connected.",
+      time: timeNow(),
     },
   ]);
+
   const [attachments, setAttachments] = useState([]);
   const [isListening, setIsListening] = useState(false);
   const [micSupported, setMicSupported] = useState(null);
-  const [status, setStatus] = useState("UI mode only — backend not connected yet.");
+  const [status, setStatus] = useState("Connected UI mode. Ready to call backend.");
   const [model, setModel] = useState("AI-Squared Agent");
+  const [isSending, setIsSending] = useState(false);
+
+  // Session memory (important for RAM wizard / multi-step flow)
+  const [sessionId, setSessionId] = useState(
+    localStorage.getItem("ai_squared_session_id") || null
+  );
+
   const fileInputRef = useRef(null);
   const recognitionRef = useRef(null);
 
@@ -43,34 +57,155 @@ export default function AISquaredChatUIStarter() {
     []
   );
 
-  const handleSend = () => {
-    const trimmed = input.trim();
-    if (!trimmed && attachments.length === 0) return;
-
-    const next = [];
-    if (trimmed) {
-      next.push({ role: "user", text: trimmed, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) });
-    }
-    if (attachments.length > 0) {
-      next.push({
-        role: "assistant",
-        text: `📎 ${attachments.length} file(s) attached in UI. Once your backend is ready, these files can be uploaded to your API or object storage.`,
-        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      });
-    }
-
-    setMessages((prev) => [
-      ...prev,
-      ...next,
+  const startNewChat = () => {
+    setMessages([
       {
         role: "assistant",
-        text: "This is a frontend-only prototype response. Next step: connect this input box to your Agent API endpoint (for example /api/chat).",
-        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        text: "New chat started. I’m ready when you are.",
+        time: timeNow(),
       },
     ]);
     setInput("");
     setAttachments([]);
-    setStatus("Message sent (frontend demo).");
+    setSessionId(null);
+    localStorage.removeItem("ai_squared_session_id");
+    setStatus("New session ready.");
+  };
+
+  const appendMessage = (msg) => {
+    setMessages((prev) => [...prev, msg]);
+  };
+
+  const uploadAttachments = async (files) => {
+    const uploaded = [];
+
+    for (const file of files) {
+      const form = new FormData();
+      form.append("file", file);
+
+      const res = await fetch(`${API_BASE}/api/upload`, {
+        method: "POST",
+        body: form,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Upload failed for ${file.name}`);
+      }
+
+      const data = await res.json();
+      uploaded.push(data);
+    }
+
+    return uploaded;
+  };
+
+  const handleSend = async () => {
+    if (isSending) return;
+
+    const trimmed = input.trim();
+    if (!trimmed && attachments.length === 0) return;
+
+    setIsSending(true);
+
+    try {
+      // Show user bubble immediately
+      if (trimmed) {
+        appendMessage({
+          role: "user",
+          text: trimmed,
+          time: timeNow(),
+        });
+      } else if (attachments.length > 0) {
+        appendMessage({
+          role: "user",
+          text:
+            attachments.length === 1
+              ? `📎 ${attachments[0].name}`
+              : `📎 ${attachments.length} files attached`,
+          time: timeNow(),
+        });
+      }
+
+      let uploadedFiles = [];
+      if (attachments.length > 0) {
+        setStatus(`Uploading ${attachments.length} file(s)...`);
+        uploadedFiles = await uploadAttachments(attachments);
+
+        appendMessage({
+          role: "assistant",
+          text:
+            uploadedFiles.length === 1
+              ? `Uploaded: ${uploadedFiles[0].filename}`
+              : `Uploaded ${uploadedFiles.length} files successfully.`,
+          time: timeNow(),
+        });
+      }
+
+      // Decide what text goes to backend
+      // - If user typed text, send the text
+      // - If user only attached a file (common for RAM wizard file step), send the server_path of first upload
+      let messageForBackend = trimmed;
+      if (!messageForBackend && uploadedFiles.length > 0) {
+        messageForBackend = uploadedFiles[0].server_path;
+      }
+
+      if (!messageForBackend) {
+        // Nothing to send to backend (e.g., weird edge case)
+        setAttachments([]);
+        setInput("");
+        setStatus("Files uploaded. Add a message or continue the wizard.");
+        return;
+      }
+
+      setStatus("Sending to backend...");
+
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: messageForBackend,
+          session_id: sessionId,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Backend error");
+      }
+
+      const data = await res.json();
+
+      // Save session id (important)
+      if (data.session_id) {
+        setSessionId(data.session_id);
+        localStorage.setItem("ai_squared_session_id", data.session_id);
+      }
+
+      appendMessage({
+        role: "assistant",
+        text: data.reply || "(No response)",
+        time: timeNow(),
+      });
+
+      setStatus(
+        data.session_id
+          ? `Connected • session ${String(data.session_id).slice(0, 8)}...`
+          : "Connected"
+      );
+
+      setInput("");
+      setAttachments([]);
+    } catch (err) {
+      appendMessage({
+        role: "assistant",
+        text: `⚠️ ${err.message || "Something went wrong."}`,
+        time: timeNow(),
+      });
+      setStatus("Error talking to backend.");
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const onFilesPicked = (files) => {
@@ -149,10 +284,15 @@ export default function AISquaredChatUIStarter() {
     <div className="h-screen w-full bg-zinc-950 text-zinc-100 flex">
       {/* Sidebar */}
       <aside
-        className={`${sidebarOpen ? "w-72" : "w-0"} transition-all duration-200 border-r border-zinc-800 overflow-hidden bg-zinc-900/70 hidden md:flex md:flex-col`}
+        className={`${
+          sidebarOpen ? "w-72" : "w-0"
+        } transition-all duration-200 border-r border-zinc-800 overflow-hidden bg-zinc-900/70 hidden md:flex md:flex-col`}
       >
         <div className="p-3 border-b border-zinc-800">
-          <button className="w-full flex items-center gap-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 px-3 py-2 text-sm">
+          <button
+            className="w-full flex items-center gap-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 px-3 py-2 text-sm"
+            onClick={startNewChat}
+          >
             <Plus className="h-4 w-4" />
             New chat
           </button>
@@ -177,7 +317,7 @@ export default function AISquaredChatUIStarter() {
         </div>
 
         <div className="mt-auto p-3 border-t border-zinc-800 text-xs text-zinc-400">
-          AI Squared UI Prototype
+          AI Squared UI • {sessionId ? `Session ${sessionId.slice(0, 8)}...` : "No active session"}
         </div>
       </aside>
 
@@ -209,14 +349,19 @@ export default function AISquaredChatUIStarter() {
             </div>
           </div>
 
-          <div className="text-xs text-zinc-400 truncate max-w-[55%] text-right">{status}</div>
+          <div className="text-xs text-zinc-400 truncate max-w-[60%] text-right">
+            {status}
+          </div>
         </header>
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-3 md:px-6 py-4 md:py-6">
           <div className="max-w-3xl mx-auto space-y-5">
             {messages.map((m, i) => (
-              <div key={i} className={`flex gap-3 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div
+                key={i}
+                className={`flex gap-3 ${m.role === "user" ? "justify-end" : "justify-start"}`}
+              >
                 {m.role !== "user" && (
                   <div className="h-8 w-8 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center shrink-0 mt-1">
                     <Bot className="h-4 w-4" />
@@ -231,7 +376,11 @@ export default function AISquaredChatUIStarter() {
                   }`}
                 >
                   <p className="text-sm leading-6 whitespace-pre-wrap">{m.text}</p>
-                  <div className={`mt-2 text-[11px] ${m.role === "user" ? "text-zinc-600" : "text-zinc-500"}`}>
+                  <div
+                    className={`mt-2 text-[11px] ${
+                      m.role === "user" ? "text-zinc-600" : "text-zinc-500"
+                    }`}
+                  >
                     {m.time}
                   </div>
                 </div>
@@ -243,6 +392,17 @@ export default function AISquaredChatUIStarter() {
                 )}
               </div>
             ))}
+
+            {isSending && (
+              <div className="flex gap-3 justify-start">
+                <div className="h-8 w-8 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center shrink-0 mt-1">
+                  <Bot className="h-4 w-4" />
+                </div>
+                <div className="max-w-[88%] rounded-2xl px-4 py-3 border bg-zinc-900 border-zinc-800">
+                  <p className="text-sm leading-6 text-zinc-400">Working…</p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -267,6 +427,7 @@ export default function AISquaredChatUIStarter() {
                         className="text-zinc-400 hover:text-zinc-100"
                         onClick={() => removeAttachment(idx)}
                         title="Remove file"
+                        type="button"
                       >
                         <Trash2 className="h-3 w-3" />
                       </button>
@@ -300,35 +461,48 @@ export default function AISquaredChatUIStarter() {
                   />
 
                   <button
-                    className="rounded-lg p-2 hover:bg-zinc-800"
+                    className="rounded-lg p-2 hover:bg-zinc-800 disabled:opacity-50"
                     title="Attach files"
                     onClick={() => fileInputRef.current?.click()}
+                    disabled={isSending}
+                    type="button"
                   >
                     <Paperclip className="h-4 w-4" />
                   </button>
 
                   <button
-                    className={`rounded-lg p-2 hover:bg-zinc-800 ${isListening ? "bg-zinc-800" : ""}`}
+                    className={`rounded-lg p-2 hover:bg-zinc-800 ${
+                      isListening ? "bg-zinc-800" : ""
+                    } disabled:opacity-50`}
                     title="Use microphone"
                     onClick={toggleMic}
+                    disabled={isSending}
+                    type="button"
                   >
-                    {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                    {isListening ? (
+                      <MicOff className="h-4 w-4" />
+                    ) : (
+                      <Mic className="h-4 w-4" />
+                    )}
                   </button>
                 </div>
 
                 <button
                   className="rounded-xl bg-zinc-100 text-zinc-900 px-3 py-2 text-sm font-medium hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                   onClick={handleSend}
-                  disabled={!input.trim() && attachments.length === 0}
+                  disabled={isSending || (!input.trim() && attachments.length === 0)}
+                  type="button"
                 >
                   <SendHorizontal className="h-4 w-4" />
-                  Send
+                  {isSending ? "Sending..." : "Send"}
                 </button>
               </div>
             </div>
 
             <p className="text-xs text-zinc-500 mt-2 px-1">
-              UI-first prototype: file upload and microphone are working in the browser UI layer. Backend integration comes next.
+              Local mode: frontend calls <code>{API_BASE}</code>. If you upload a file and send
+              with no text, the first uploaded file path is sent to the backend (useful for the RAM
+              wizard file step).
               {micSupported === false ? " (Mic recognition not supported in this browser.)" : ""}
             </p>
           </div>
