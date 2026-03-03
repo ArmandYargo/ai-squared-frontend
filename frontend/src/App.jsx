@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   PanelLeft,
   Plus,
@@ -13,14 +13,70 @@ import {
   User,
   Sparkles,
   ChevronDown,
+  LogOut,
+  Lock,
 } from "lucide-react";
-
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
-
 function timeNow() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function LoginScreen({ password, setPassword, loginError, isLoggingIn, onLogin }) {
+  return (
+    <div className="min-h-screen w-full bg-zinc-950 text-zinc-100 flex items-center justify-center px-4">
+      <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-900 p-8 shadow-2xl">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="h-11 w-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center">
+            <Lock className="h-5 w-5 text-emerald-300" />
+          </div>
+          <div>
+            <h1 className="text-xl font-semibold">AI Squared</h1>
+            <p className="text-sm text-zinc-400">Private access only</p>
+          </div>
+        </div>
+
+        <p className="text-sm text-zinc-300 mb-4">
+          Enter the shared password to access the assistant.
+        </p>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onLogin();
+          }}
+          className="space-y-4"
+        >
+          <div>
+            <label className="block text-sm text-zinc-300 mb-2">Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 outline-none focus:border-zinc-500"
+              placeholder="Enter password"
+              autoFocus
+            />
+          </div>
+
+          {loginError && (
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              {loginError}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={isLoggingIn || !password.trim()}
+            className="w-full rounded-xl bg-zinc-100 text-zinc-900 px-4 py-3 text-sm font-medium hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isLoggingIn ? "Signing in..." : "Enter AI Squared"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 }
 
 export default function AISquaredChatUIStarter() {
@@ -37,14 +93,19 @@ export default function AISquaredChatUIStarter() {
   const [attachments, setAttachments] = useState([]);
   const [isListening, setIsListening] = useState(false);
   const [micSupported, setMicSupported] = useState(null);
-  const [status, setStatus] = useState("Connected UI mode. Ready to call backend.");
+  const [status, setStatus] = useState("Ready.");
   const [model, setModel] = useState("AI-Squared Agent");
   const [isSending, setIsSending] = useState(false);
 
-  // Session memory (important for RAM wizard / multi-step flow)
   const [sessionId, setSessionId] = useState(
     localStorage.getItem("ai_squared_session_id") || null
   );
+
+  const [authChecked, setAuthChecked] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [password, setPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const fileInputRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -58,6 +119,85 @@ export default function AISquaredChatUIStarter() {
     ],
     []
   );
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/me`, {
+          method: "GET",
+          credentials: "include",
+        });
+
+        if (!res.ok) {
+          setIsAuthenticated(false);
+          setAuthChecked(true);
+          return;
+        }
+
+        const data = await res.json();
+        setIsAuthenticated(Boolean(data.authenticated));
+      } catch {
+        setIsAuthenticated(false);
+      } finally {
+        setAuthChecked(true);
+      }
+    };
+
+    checkAuth();
+  }, []);
+
+  const handleLogin = async () => {
+    if (!password.trim()) return;
+
+    setIsLoggingIn(true);
+    setLoginError("");
+
+    try {
+      const res = await fetch(`${API_BASE}/api/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ password }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data.detail || "Login failed.");
+      }
+
+      setIsAuthenticated(true);
+      setPassword("");
+      setStatus("Authenticated.");
+    } catch (err) {
+      setLoginError(err.message || "Login failed.");
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch(`${API_BASE}/api/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      // ignore
+    }
+
+    setIsAuthenticated(false);
+    setSessionId(null);
+    localStorage.removeItem("ai_squared_session_id");
+    setMessages([
+      {
+        role: "assistant",
+        text: "Hi — I’m your AI Squared assistant. I can help with engineering workflows, RAM wizard steps, and document-based Q&A once your backend is connected.",
+        time: timeNow(),
+      },
+    ]);
+    setStatus("Signed out.");
+  };
 
   const startNewChat = () => {
     setMessages([
@@ -88,7 +228,13 @@ export default function AISquaredChatUIStarter() {
       const res = await fetch(`${API_BASE}/api/upload`, {
         method: "POST",
         body: form,
+        credentials: "include",
       });
+
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        throw new Error("Session expired. Please sign in again.");
+      }
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -111,7 +257,6 @@ export default function AISquaredChatUIStarter() {
     setIsSending(true);
 
     try {
-      // Show user bubble immediately
       if (trimmed) {
         appendMessage({
           role: "user",
@@ -144,16 +289,12 @@ export default function AISquaredChatUIStarter() {
         });
       }
 
-      // Decide what text goes to backend
-      // - If user typed text, send the text
-      // - If user only attached a file (common for RAM wizard file step), send the server_path of first upload
       let messageForBackend = trimmed;
       if (!messageForBackend && uploadedFiles.length > 0) {
         messageForBackend = uploadedFiles[0].server_path;
       }
 
       if (!messageForBackend) {
-        // Nothing to send to backend (e.g., weird edge case)
         setAttachments([]);
         setInput("");
         setStatus("Files uploaded. Add a message or continue the wizard.");
@@ -165,11 +306,17 @@ export default function AISquaredChatUIStarter() {
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           message: messageForBackend,
           session_id: sessionId,
         }),
       });
+
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        throw new Error("Session expired. Please sign in again.");
+      }
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -178,7 +325,6 @@ export default function AISquaredChatUIStarter() {
 
       const data = await res.json();
 
-      // Save session id (important)
       if (data.session_id) {
         setSessionId(data.session_id);
         localStorage.setItem("ai_squared_session_id", data.session_id);
@@ -282,9 +428,28 @@ export default function AISquaredChatUIStarter() {
     e.stopPropagation();
   };
 
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen w-full bg-zinc-950 text-zinc-100 flex items-center justify-center">
+        <div className="text-sm text-zinc-400">Checking access…</div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <LoginScreen
+        password={password}
+        setPassword={setPassword}
+        loginError={loginError}
+        isLoggingIn={isLoggingIn}
+        onLogin={handleLogin}
+      />
+    );
+  }
+
   return (
     <div className="h-screen w-full bg-zinc-950 text-zinc-100 flex">
-      {/* Sidebar */}
       <aside
         className={`${
           sidebarOpen ? "w-72" : "w-0"
@@ -318,14 +483,21 @@ export default function AISquaredChatUIStarter() {
           ))}
         </div>
 
-        <div className="mt-auto p-3 border-t border-zinc-800 text-xs text-zinc-400">
-          AI Squared UI • {sessionId ? `Session ${sessionId.slice(0, 8)}...` : "No active session"}
+        <div className="mt-auto p-3 border-t border-zinc-800 text-xs text-zinc-400 flex items-center justify-between gap-3">
+          <span className="truncate">
+            AI Squared • {sessionId ? `Session ${sessionId.slice(0, 8)}...` : "Signed in"}
+          </span>
+          <button
+            onClick={handleLogout}
+            className="rounded-lg p-2 hover:bg-zinc-800"
+            title="Sign out"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
         </div>
       </aside>
 
-      {/* Main */}
       <main className="flex-1 flex flex-col min-w-0">
-        {/* Top bar */}
         <header className="h-14 border-b border-zinc-800 px-3 md:px-4 flex items-center justify-between bg-zinc-950/80 backdrop-blur">
           <div className="flex items-center gap-2">
             <button
@@ -356,7 +528,6 @@ export default function AISquaredChatUIStarter() {
           </div>
         </header>
 
-        {/* Messages */}
         <div className="flex-1 overflow-y-auto px-3 md:px-6 py-4 md:py-6">
           <div className="max-w-3xl mx-auto space-y-5">
             {messages.map((m, i) => (
@@ -408,7 +579,6 @@ export default function AISquaredChatUIStarter() {
           </div>
         </div>
 
-        {/* Composer */}
         <div className="border-t border-zinc-800 px-3 md:px-6 py-3 bg-zinc-950">
           <div className="max-w-3xl mx-auto">
             <div
@@ -502,9 +672,7 @@ export default function AISquaredChatUIStarter() {
             </div>
 
             <p className="text-xs text-zinc-500 mt-2 px-1">
-              Local mode: frontend calls <code>{API_BASE}</code>. If you upload a file and send
-              with no text, the first uploaded file path is sent to the backend (useful for the RAM
-              wizard file step).
+              Protected mode: authenticated requests are sent to <code>{API_BASE}</code>.
               {micSupported === false ? " (Mic recognition not supported in this browser.)" : ""}
             </p>
           </div>
