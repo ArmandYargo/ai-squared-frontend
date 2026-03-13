@@ -19,8 +19,54 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
+const DEFAULT_ASSISTANT_MESSAGE =
+  "Hi — I’m your AI Squared assistant. I can help with engineering workflows, RAM wizard steps, and document-based Q&A once your backend is connected.";
+
 function timeNow() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function makeBrowserId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `browser_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function getOrCreateBrowserId() {
+  const key = "ai_squared_browser_id";
+  let value = localStorage.getItem(key);
+  if (!value) {
+    value = makeBrowserId();
+    localStorage.setItem(key, value);
+  }
+  return value;
+}
+
+function formatMessageFromApi(msg) {
+  return {
+    id: msg.id,
+    role: msg.role,
+    text: msg.content || "",
+    speaker: msg.speaker || (msg.role === "assistant" ? "ASSISTANT" : "USER"),
+    time: msg.created_at
+      ? new Date(msg.created_at).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : timeNow(),
+  };
+}
+
+function buildDefaultMessages(text = DEFAULT_ASSISTANT_MESSAGE) {
+  return [
+    {
+      role: "assistant",
+      text,
+      speaker: "ASSISTANT",
+      time: timeNow(),
+    },
+  ];
 }
 
 function LoginScreen({ password, setPassword, loginError, isLoggingIn, onLogin }) {
@@ -82,13 +128,7 @@ function LoginScreen({ password, setPassword, loginError, isLoggingIn, onLogin }
 export default function AISquaredChatUIStarter() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState([
-    {
-      role: "assistant",
-      text: "Hi — I’m your AI Squared assistant. I can help with engineering workflows, RAM wizard steps, and document-based Q&A once your backend is connected.",
-      time: timeNow(),
-    },
-  ]);
+  const [messages, setMessages] = useState(buildDefaultMessages());
 
   const [attachments, setAttachments] = useState([]);
   const [isListening, setIsListening] = useState(false);
@@ -97,9 +137,17 @@ export default function AISquaredChatUIStarter() {
   const [model, setModel] = useState("AI-Squared Agent");
   const [isSending, setIsSending] = useState(false);
 
-  const [sessionId, setSessionId] = useState(
-    localStorage.getItem("ai_squared_session_id") || null
+  const [browserId, setBrowserId] = useState(null);
+  const [conversationId, setConversationId] = useState(
+    localStorage.getItem("ai_squared_conversation_id") ||
+      localStorage.getItem("ai_squared_session_id") ||
+      null
   );
+
+  const [conversations, setConversations] = useState([]);
+  const [isLoadingConversations, setIsLoadingConversations] = useState(false);
+  const [isOpeningConversation, setIsOpeningConversation] = useState(false);
+  const [chatSearch, setChatSearch] = useState("");
 
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -110,15 +158,118 @@ export default function AISquaredChatUIStarter() {
   const fileInputRef = useRef(null);
   const recognitionRef = useRef(null);
 
-  const recentChats = useMemo(
-    () => [
-      "Pump sizing review",
-      "Electrical load estimate",
-      "P&ID discussion",
-      "Material selection notes",
-    ],
-    []
-  );
+  const filteredConversations = useMemo(() => {
+    const q = chatSearch.trim().toLowerCase();
+    if (!q) return conversations;
+    return conversations.filter((c) => {
+      const title = (c.title || "").toLowerCase();
+      const preview = (c.last_message_preview || "").toLowerCase();
+      return title.includes(q) || preview.includes(q);
+    });
+  }, [chatSearch, conversations]);
+
+  const appendMessage = (msg) => {
+    setMessages((prev) => [...prev, msg]);
+  };
+
+  const saveConversationId = (id) => {
+    if (!id) return;
+    setConversationId(id);
+    localStorage.setItem("ai_squared_conversation_id", id);
+    localStorage.setItem("ai_squared_session_id", id);
+  };
+
+  const clearConversationId = () => {
+    setConversationId(null);
+    localStorage.removeItem("ai_squared_conversation_id");
+    localStorage.removeItem("ai_squared_session_id");
+  };
+
+  const loadConversations = async (resolvedBrowserId) => {
+    if (!resolvedBrowserId) return;
+
+    setIsLoadingConversations(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/conversations?browser_id=${encodeURIComponent(resolvedBrowserId)}`,
+        {
+          method: "GET",
+          credentials: "include",
+        }
+      );
+
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        return;
+      }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to load conversations.");
+      }
+
+      const data = await res.json();
+      setConversations(Array.isArray(data.items) ? data.items : []);
+    } catch (err) {
+      setStatus(err.message || "Failed to load conversations.");
+    } finally {
+      setIsLoadingConversations(false);
+    }
+  };
+
+  const openConversation = async (id, resolvedBrowserId = browserId) => {
+    if (!id || !resolvedBrowserId) return;
+
+    setIsOpeningConversation(true);
+    setStatus("Opening saved chat...");
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/conversations/${encodeURIComponent(
+          id
+        )}?browser_id=${encodeURIComponent(resolvedBrowserId)}`,
+        {
+          method: "GET",
+          credentials: "include",
+        }
+      );
+
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        throw new Error("Session expired. Please sign in again.");
+      }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to open conversation.");
+      }
+
+      const data = await res.json();
+      const nextMessages =
+        Array.isArray(data.messages) && data.messages.length > 0
+          ? data.messages.map(formatMessageFromApi)
+          : buildDefaultMessages("Reopened chat. Continue where you left off.");
+
+      setMessages(nextMessages);
+      saveConversationId(data.conversation_id || id);
+      setStatus("Saved chat reopened.");
+    } catch (err) {
+      appendMessage({
+        role: "assistant",
+        text: `⚠️ ${err.message || "Failed to open conversation."}`,
+        speaker: "ASSISTANT",
+        time: timeNow(),
+      });
+      setStatus("Could not open saved chat.");
+    } finally {
+      setIsOpeningConversation(false);
+    }
+  };
+
+  useEffect(() => {
+    const storedBrowserId = getOrCreateBrowserId();
+    setBrowserId(storedBrowserId);
+  }, []);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -146,6 +297,17 @@ export default function AISquaredChatUIStarter() {
     checkAuth();
   }, []);
 
+  useEffect(() => {
+    if (!isAuthenticated || !browserId) return;
+
+    loadConversations(browserId);
+  }, [isAuthenticated, browserId]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !browserId || !conversationId) return;
+    openConversation(conversationId, browserId);
+  }, [isAuthenticated, browserId]); // intentionally only when auth/browser become ready
+
   const handleLogin = async () => {
     if (!password.trim()) return;
 
@@ -169,6 +331,13 @@ export default function AISquaredChatUIStarter() {
       setIsAuthenticated(true);
       setPassword("");
       setStatus("Authenticated.");
+
+      if (browserId) {
+        await loadConversations(browserId);
+        if (conversationId) {
+          await openConversation(conversationId, browserId);
+        }
+      }
     } catch (err) {
       setLoginError(err.message || "Login failed.");
     } finally {
@@ -187,35 +356,18 @@ export default function AISquaredChatUIStarter() {
     }
 
     setIsAuthenticated(false);
-    setSessionId(null);
-    localStorage.removeItem("ai_squared_session_id");
-    setMessages([
-      {
-        role: "assistant",
-        text: "Hi — I’m your AI Squared assistant. I can help with engineering workflows, RAM wizard steps, and document-based Q&A once your backend is connected.",
-        time: timeNow(),
-      },
-    ]);
+    clearConversationId();
+    setConversations([]);
+    setMessages(buildDefaultMessages());
     setStatus("Signed out.");
   };
 
   const startNewChat = () => {
-    setMessages([
-      {
-        role: "assistant",
-        text: "New chat started. I’m ready when you are.",
-        time: timeNow(),
-      },
-    ]);
+    clearConversationId();
+    setMessages(buildDefaultMessages("New chat started. I’m ready when you are."));
     setInput("");
     setAttachments([]);
-    setSessionId(null);
-    localStorage.removeItem("ai_squared_session_id");
-    setStatus("New session ready.");
-  };
-
-  const appendMessage = (msg) => {
-    setMessages((prev) => [...prev, msg]);
+    setStatus("New conversation ready.");
   };
 
   const uploadAttachments = async (files) => {
@@ -249,7 +401,7 @@ export default function AISquaredChatUIStarter() {
   };
 
   const handleSend = async () => {
-    if (isSending) return;
+    if (isSending || isOpeningConversation) return;
 
     const trimmed = input.trim();
     if (!trimmed && attachments.length === 0) return;
@@ -261,6 +413,7 @@ export default function AISquaredChatUIStarter() {
         appendMessage({
           role: "user",
           text: trimmed,
+          speaker: "USER",
           time: timeNow(),
         });
       } else if (attachments.length > 0) {
@@ -270,6 +423,7 @@ export default function AISquaredChatUIStarter() {
             attachments.length === 1
               ? `📎 ${attachments[0].name}`
               : `📎 ${attachments.length} files attached`,
+          speaker: "USER",
           time: timeNow(),
         });
       }
@@ -285,6 +439,7 @@ export default function AISquaredChatUIStarter() {
             uploadedFiles.length === 1
               ? `Uploaded: ${uploadedFiles[0].filename}`
               : `Uploaded ${uploadedFiles.length} files successfully.`,
+          speaker: "ASSISTANT",
           time: timeNow(),
         });
       }
@@ -309,7 +464,8 @@ export default function AISquaredChatUIStarter() {
         credentials: "include",
         body: JSON.stringify({
           message: messageForBackend,
-          session_id: sessionId,
+          conversation_id: conversationId,
+          browser_id: browserId,
         }),
       });
 
@@ -325,29 +481,31 @@ export default function AISquaredChatUIStarter() {
 
       const data = await res.json();
 
-      if (data.session_id) {
-        setSessionId(data.session_id);
-        localStorage.setItem("ai_squared_session_id", data.session_id);
+      if (data.conversation_id) {
+        saveConversationId(data.conversation_id);
       }
 
       appendMessage({
         role: "assistant",
         text: data.reply || "(No response)",
+        speaker: data.speaker || "ASSISTANT",
         time: timeNow(),
       });
 
       setStatus(
-        data.session_id
-          ? `Connected • session ${String(data.session_id).slice(0, 8)}...`
+        data.conversation_id
+          ? `Connected • chat ${String(data.conversation_id).slice(0, 8)}...`
           : "Connected"
       );
 
       setInput("");
       setAttachments([]);
+      await loadConversations(browserId);
     } catch (err) {
       appendMessage({
         role: "assistant",
         text: `⚠️ ${err.message || "Something went wrong."}`,
+        speaker: "ASSISTANT",
         time: timeNow(),
       });
       setStatus("Error talking to backend.");
@@ -466,31 +624,64 @@ export default function AISquaredChatUIStarter() {
         </div>
 
         <div className="p-3">
-          <div className="flex items-center gap-2 rounded-xl bg-zinc-800/60 px-3 py-2 text-sm text-zinc-400">
-            <Search className="h-4 w-4" /> Search chats
+          <div className="flex items-center gap-2 rounded-xl bg-zinc-800/60 px-3 py-2">
+            <Search className="h-4 w-4 text-zinc-400" />
+            <input
+              value={chatSearch}
+              onChange={(e) => setChatSearch(e.target.value)}
+              placeholder="Search chats"
+              className="w-full bg-transparent text-sm text-zinc-200 outline-none placeholder:text-zinc-500"
+            />
           </div>
         </div>
 
         <div className="px-2 pb-3 space-y-1 overflow-y-auto">
-          {recentChats.map((title, idx) => (
-            <button
-              key={idx}
-              className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-left hover:bg-zinc-800"
-            >
-              <MessageSquare className="h-4 w-4 text-zinc-400" />
-              <span className="truncate">{title}</span>
-            </button>
-          ))}
+          {isLoadingConversations && (
+            <div className="px-3 py-2 text-xs text-zinc-500">Loading chats...</div>
+          )}
+
+          {!isLoadingConversations && filteredConversations.length === 0 && (
+            <div className="px-3 py-2 text-xs text-zinc-500">No saved chats yet.</div>
+          )}
+
+          {filteredConversations.map((chat) => {
+            const active = conversationId === chat.id;
+            return (
+              <button
+                key={chat.id}
+                className={`w-full rounded-lg px-3 py-2 text-left hover:bg-zinc-800 ${
+                  active ? "bg-zinc-800" : ""
+                }`}
+                onClick={() => openConversation(chat.id)}
+                type="button"
+              >
+                <div className="flex items-start gap-2">
+                  <MessageSquare className="h-4 w-4 text-zinc-400 mt-0.5 shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm text-zinc-100">
+                      {chat.title || "Untitled chat"}
+                    </div>
+                    {chat.last_message_preview && (
+                      <div className="truncate text-xs text-zinc-500 mt-0.5">
+                        {chat.last_message_preview}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
         </div>
 
         <div className="mt-auto p-3 border-t border-zinc-800 text-xs text-zinc-400 flex items-center justify-between gap-3">
           <span className="truncate">
-            AI Squared • {sessionId ? `Session ${sessionId.slice(0, 8)}...` : "Signed in"}
+            AI Squared • {conversationId ? `Chat ${conversationId.slice(0, 8)}...` : "Signed in"}
           </span>
           <button
             onClick={handleLogout}
             className="rounded-lg p-2 hover:bg-zinc-800"
             title="Sign out"
+            type="button"
           >
             <LogOut className="h-4 w-4" />
           </button>
@@ -504,6 +695,7 @@ export default function AISquaredChatUIStarter() {
               className="rounded-lg p-2 hover:bg-zinc-800"
               onClick={() => setSidebarOpen((s) => !s)}
               title="Toggle sidebar"
+              type="button"
             >
               <PanelLeft className="h-4 w-4" />
             </button>
@@ -532,7 +724,7 @@ export default function AISquaredChatUIStarter() {
           <div className="max-w-3xl mx-auto space-y-5">
             {messages.map((m, i) => (
               <div
-                key={i}
+                key={m.id || i}
                 className={`flex gap-3 ${m.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 {m.role !== "user" && (
@@ -566,13 +758,15 @@ export default function AISquaredChatUIStarter() {
               </div>
             ))}
 
-            {isSending && (
+            {(isSending || isOpeningConversation) && (
               <div className="flex gap-3 justify-start">
                 <div className="h-8 w-8 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center shrink-0 mt-1">
                   <Bot className="h-4 w-4" />
                 </div>
                 <div className="max-w-[88%] rounded-2xl px-4 py-3 border bg-zinc-900 border-zinc-800">
-                  <p className="text-sm leading-6 text-zinc-400">Working…</p>
+                  <p className="text-sm leading-6 text-zinc-400">
+                    {isOpeningConversation ? "Loading saved chat..." : "Working…"}
+                  </p>
                 </div>
               </div>
             )}
@@ -636,7 +830,7 @@ export default function AISquaredChatUIStarter() {
                     className="rounded-lg p-2 hover:bg-zinc-800 disabled:opacity-50"
                     title="Attach files"
                     onClick={() => fileInputRef.current?.click()}
-                    disabled={isSending}
+                    disabled={isSending || isOpeningConversation}
                     type="button"
                   >
                     <Paperclip className="h-4 w-4" />
@@ -648,7 +842,7 @@ export default function AISquaredChatUIStarter() {
                     } disabled:opacity-50`}
                     title="Use microphone"
                     onClick={toggleMic}
-                    disabled={isSending}
+                    disabled={isSending || isOpeningConversation}
                     type="button"
                   >
                     {isListening ? (
@@ -662,7 +856,11 @@ export default function AISquaredChatUIStarter() {
                 <button
                   className="rounded-xl bg-zinc-100 text-zinc-900 px-3 py-2 text-sm font-medium hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                   onClick={handleSend}
-                  disabled={isSending || (!input.trim() && attachments.length === 0)}
+                  disabled={
+                    isSending ||
+                    isOpeningConversation ||
+                    (!input.trim() && attachments.length === 0)
+                  }
                   type="button"
                 >
                   <SendHorizontal className="h-4 w-4" />
