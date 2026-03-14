@@ -15,6 +15,9 @@ import {
   ChevronDown,
   LogOut,
   Lock,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -149,6 +152,13 @@ export default function AISquaredChatUIStarter() {
   const [isOpeningConversation, setIsOpeningConversation] = useState(false);
   const [chatSearch, setChatSearch] = useState("");
 
+  const [artifacts, setArtifacts] = useState([]);
+  const [isLoadingArtifacts, setIsLoadingArtifacts] = useState(false);
+  const [renamingConversationId, setRenamingConversationId] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [deletingConversationId, setDeletingConversationId] = useState(null);
+  const [deletingArtifactId, setDeletingArtifactId] = useState(null);
+
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
@@ -217,6 +227,43 @@ export default function AISquaredChatUIStarter() {
     }
   };
 
+  const loadArtifacts = async (id, resolvedBrowserId = browserId) => {
+    if (!id || !resolvedBrowserId) {
+      setArtifacts([]);
+      return;
+    }
+
+    setIsLoadingArtifacts(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/conversations/${encodeURIComponent(
+          id
+        )}/artifacts?browser_id=${encodeURIComponent(resolvedBrowserId)}`,
+        {
+          method: "GET",
+          credentials: "include",
+        }
+      );
+
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        return;
+      }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to load artifacts.");
+      }
+
+      const data = await res.json();
+      setArtifacts(Array.isArray(data.items) ? data.items : []);
+    } catch (err) {
+      setStatus(err.message || "Failed to load artifacts.");
+    } finally {
+      setIsLoadingArtifacts(false);
+    }
+  };
+
   const openConversation = async (id, resolvedBrowserId = browserId) => {
     if (!id || !resolvedBrowserId) return;
 
@@ -252,6 +299,7 @@ export default function AISquaredChatUIStarter() {
 
       setMessages(nextMessages);
       saveConversationId(data.conversation_id || id);
+      await loadArtifacts(data.conversation_id || id, resolvedBrowserId);
       setStatus("Saved chat reopened.");
     } catch (err) {
       appendMessage({
@@ -299,14 +347,22 @@ export default function AISquaredChatUIStarter() {
 
   useEffect(() => {
     if (!isAuthenticated || !browserId) return;
-
     loadConversations(browserId);
   }, [isAuthenticated, browserId]);
 
   useEffect(() => {
     if (!isAuthenticated || !browserId || !conversationId) return;
     openConversation(conversationId, browserId);
-  }, [isAuthenticated, browserId]); // intentionally only when auth/browser become ready
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, browserId]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !browserId || !conversationId) {
+      setArtifacts([]);
+      return;
+    }
+    loadArtifacts(conversationId, browserId);
+  }, [isAuthenticated, browserId, conversationId]);
 
   const handleLogin = async () => {
     if (!password.trim()) return;
@@ -358,12 +414,14 @@ export default function AISquaredChatUIStarter() {
     setIsAuthenticated(false);
     clearConversationId();
     setConversations([]);
+    setArtifacts([]);
     setMessages(buildDefaultMessages());
     setStatus("Signed out.");
   };
 
   const startNewChat = () => {
     clearConversationId();
+    setArtifacts([]);
     setMessages(buildDefaultMessages("New chat started. I’m ready when you are."));
     setInput("");
     setAttachments([]);
@@ -376,6 +434,13 @@ export default function AISquaredChatUIStarter() {
     for (const file of files) {
       const form = new FormData();
       form.append("file", file);
+
+      if (conversationId) {
+        form.append("conversation_id", conversationId);
+      }
+      if (browserId) {
+        form.append("browser_id", browserId);
+      }
 
       const res = await fetch(`${API_BASE}/api/upload`, {
         method: "POST",
@@ -394,6 +459,11 @@ export default function AISquaredChatUIStarter() {
       }
 
       const data = await res.json();
+
+      if (data.conversation_id) {
+        saveConversationId(data.conversation_id);
+      }
+
       uploaded.push(data);
     }
 
@@ -442,6 +512,15 @@ export default function AISquaredChatUIStarter() {
           speaker: "ASSISTANT",
           time: timeNow(),
         });
+
+        await loadConversations(browserId);
+
+        const activeConversationId =
+          uploadedFiles[0]?.conversation_id || conversationId;
+
+        if (activeConversationId) {
+          await loadArtifacts(activeConversationId, browserId);
+        }
       }
 
       let messageForBackend = trimmed;
@@ -458,13 +537,16 @@ export default function AISquaredChatUIStarter() {
 
       setStatus("Sending to backend...");
 
+      const activeConversationId =
+        uploadedFiles[0]?.conversation_id || conversationId;
+
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
           message: messageForBackend,
-          conversation_id: conversationId,
+          conversation_id: activeConversationId,
           browser_id: browserId,
         }),
       });
@@ -501,6 +583,10 @@ export default function AISquaredChatUIStarter() {
       setInput("");
       setAttachments([]);
       await loadConversations(browserId);
+
+      if (data.conversation_id) {
+        await loadArtifacts(data.conversation_id, browserId);
+      }
     } catch (err) {
       appendMessage({
         role: "assistant",
@@ -511,6 +597,125 @@ export default function AISquaredChatUIStarter() {
       setStatus("Error talking to backend.");
     } finally {
       setIsSending(false);
+    }
+  };
+
+  const handleRenameConversation = async (id) => {
+    const title = renameValue.trim();
+    if (!id || !title) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          title,
+          browser_id: browserId,
+        }),
+      });
+
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        throw new Error("Session expired. Please sign in again.");
+      }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to rename conversation.");
+      }
+
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, title } : c))
+      );
+      setRenamingConversationId(null);
+      setRenameValue("");
+      setStatus("Conversation renamed.");
+    } catch (err) {
+      setStatus(err.message || "Rename failed.");
+    }
+  };
+
+  const handleDeleteConversation = async (id) => {
+    if (!id) return;
+
+    const confirmed = window.confirm("Delete this conversation and its artifacts?");
+    if (!confirmed) return;
+
+    setDeletingConversationId(id);
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/conversations/${encodeURIComponent(
+          id
+        )}?browser_id=${encodeURIComponent(browserId)}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        }
+      );
+
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        throw new Error("Session expired. Please sign in again.");
+      }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to delete conversation.");
+      }
+
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+
+      if (conversationId === id) {
+        clearConversationId();
+        setArtifacts([]);
+        setMessages(buildDefaultMessages("Conversation deleted. Start a new chat."));
+      }
+
+      setStatus("Conversation deleted.");
+    } catch (err) {
+      setStatus(err.message || "Delete failed.");
+    } finally {
+      setDeletingConversationId(null);
+    }
+  };
+
+  const handleDeleteArtifact = async (artifactId) => {
+    if (!artifactId) return;
+
+    const confirmed = window.confirm("Delete this artifact?");
+    if (!confirmed) return;
+
+    setDeletingArtifactId(artifactId);
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/artifacts/${encodeURIComponent(
+          artifactId
+        )}?browser_id=${encodeURIComponent(browserId)}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        }
+      );
+
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        throw new Error("Session expired. Please sign in again.");
+      }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to delete artifact.");
+      }
+
+      setArtifacts((prev) => prev.filter((a) => a.id !== artifactId));
+      setStatus("Artifact deleted.");
+    } catch (err) {
+      setStatus(err.message || "Artifact delete failed.");
+    } finally {
+      setDeletingArtifactId(null);
     }
   };
 
@@ -617,6 +822,7 @@ export default function AISquaredChatUIStarter() {
           <button
             className="w-full flex items-center gap-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 px-3 py-2 text-sm"
             onClick={startNewChat}
+            type="button"
           >
             <Plus className="h-4 w-4" />
             New chat
@@ -646,29 +852,112 @@ export default function AISquaredChatUIStarter() {
 
           {filteredConversations.map((chat) => {
             const active = conversationId === chat.id;
+            const isRenaming = renamingConversationId === chat.id;
+            const isDeleting = deletingConversationId === chat.id;
+
             return (
-              <button
+              <div
                 key={chat.id}
-                className={`w-full rounded-lg px-3 py-2 text-left hover:bg-zinc-800 ${
-                  active ? "bg-zinc-800" : ""
+                className={`group rounded-lg px-2 py-1 ${
+                  active ? "bg-zinc-800" : "hover:bg-zinc-800"
                 }`}
-                onClick={() => openConversation(chat.id)}
-                type="button"
               >
                 <div className="flex items-start gap-2">
-                  <MessageSquare className="h-4 w-4 text-zinc-400 mt-0.5 shrink-0" />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm text-zinc-100">
-                      {chat.title || "Untitled chat"}
+                  <button
+                    className="flex min-w-0 flex-1 items-start gap-2 text-left px-1 py-1"
+                    onClick={() => openConversation(chat.id)}
+                    type="button"
+                    disabled={isDeleting}
+                  >
+                    <MessageSquare className="h-4 w-4 text-zinc-400 mt-0.5 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      {isRenaming ? (
+                        <div
+                          className="flex items-center gap-1"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm outline-none"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                handleRenameConversation(chat.id);
+                              }
+                              if (e.key === "Escape") {
+                                setRenamingConversationId(null);
+                                setRenameValue("");
+                              }
+                            }}
+                          />
+                          <button
+                            className="rounded p-1 hover:bg-zinc-700"
+                            type="button"
+                            onClick={() => handleRenameConversation(chat.id)}
+                            title="Save name"
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            className="rounded p-1 hover:bg-zinc-700"
+                            type="button"
+                            onClick={() => {
+                              setRenamingConversationId(null);
+                              setRenameValue("");
+                            }}
+                            title="Cancel rename"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="truncate text-sm text-zinc-100">
+                            {chat.title || "Untitled chat"}
+                          </div>
+                          {chat.last_message_preview && (
+                            <div className="truncate text-xs text-zinc-500 mt-0.5">
+                              {chat.last_message_preview}
+                            </div>
+                          )}
+                        </>
+                      )}
                     </div>
-                    {chat.last_message_preview && (
-                      <div className="truncate text-xs text-zinc-500 mt-0.5">
-                        {chat.last_message_preview}
-                      </div>
-                    )}
-                  </div>
+                  </button>
+
+                  {!isRenaming && (
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        className="rounded-md p-1.5 hover:bg-zinc-700"
+                        type="button"
+                        title="Rename"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRenamingConversationId(chat.id);
+                          setRenameValue(chat.title || "");
+                        }}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+
+                      <button
+                        className="rounded-md p-1.5 hover:bg-zinc-700 disabled:opacity-50"
+                        type="button"
+                        title="Delete"
+                        disabled={isDeleting}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteConversation(chat.id);
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>
@@ -721,6 +1010,45 @@ export default function AISquaredChatUIStarter() {
         </header>
 
         <div className="flex-1 overflow-y-auto px-3 md:px-6 py-4 md:py-6">
+          {conversationId && (
+            <div className="max-w-3xl mx-auto mb-4">
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900 px-3 py-3">
+                <div className="text-xs uppercase tracking-wide text-zinc-500 mb-2">
+                  Conversation artifacts
+                </div>
+
+                {isLoadingArtifacts ? (
+                  <div className="text-sm text-zinc-400">Loading artifacts...</div>
+                ) : artifacts.length === 0 ? (
+                  <div className="text-sm text-zinc-500">No artifacts for this conversation yet.</div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {artifacts.map((artifact) => (
+                      <div
+                        key={artifact.id}
+                        className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs"
+                      >
+                        <Paperclip className="h-3 w-3" />
+                        <span className="max-w-56 truncate">
+                          {artifact.title || artifact.output_type || "Artifact"}
+                        </span>
+                        <button
+                          className="text-zinc-400 hover:text-zinc-100 disabled:opacity-50"
+                          onClick={() => handleDeleteArtifact(artifact.id)}
+                          title="Delete artifact"
+                          type="button"
+                          disabled={deletingArtifactId === artifact.id}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="max-w-3xl mx-auto space-y-5">
             {messages.map((m, i) => (
               <div
