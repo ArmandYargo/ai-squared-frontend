@@ -18,6 +18,7 @@ import {
   Pencil,
   Check,
   X,
+  Download,
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -528,7 +529,7 @@ export default function AISquaredChatUIStarter() {
       if (!messageForBackend) {
         setAttachments([]);
         setInput("");
-        setStatus("Files uploaded. Ask a question about the document when ready.");
+        setStatus("Files uploaded. Continue the chat or wizard when ready.");
         return;
       }
 
@@ -715,6 +716,11 @@ export default function AISquaredChatUIStarter() {
       setDeletingArtifactId(null);
     }
   };
+
+  const artifactDownloadUrl = (artifactId) =>
+    `${API_BASE}/api/artifacts/${encodeURIComponent(
+      artifactId
+    )}/download?browser_id=${encodeURIComponent(browserId || "")}`;
 
   const onFilesPicked = (files) => {
     const picked = Array.from(files || []);
@@ -1019,25 +1025,44 @@ export default function AISquaredChatUIStarter() {
                 ) : artifacts.length === 0 ? (
                   <div className="text-sm text-zinc-500">No artifacts for this conversation yet.</div>
                 ) : (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="space-y-2">
                     {artifacts.map((artifact) => (
                       <div
                         key={artifact.id}
-                        className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs"
+                        className="flex items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs"
                       >
-                        <Paperclip className="h-3 w-3" />
-                        <span className="max-w-56 truncate">
-                          {artifact.title || artifact.output_type || "Artifact"}
-                        </span>
-                        <button
-                          className="text-zinc-400 hover:text-zinc-100 disabled:opacity-50"
-                          onClick={() => handleDeleteArtifact(artifact.id)}
-                          title="Delete artifact"
-                          type="button"
-                          disabled={deletingArtifactId === artifact.id}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
+                        <div className="min-w-0 flex items-center gap-2">
+                          <Paperclip className="h-3 w-3 shrink-0" />
+                          <div className="min-w-0">
+                            <div className="truncate text-zinc-100">
+                              {artifact.title || artifact.output_type || "Artifact"}
+                            </div>
+                            <div className="truncate text-zinc-500">
+                              {artifact.output_type}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <a
+                            href={artifactDownloadUrl(artifact.id)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="rounded-md p-1.5 hover:bg-zinc-700 text-zinc-300"
+                            title="Download artifact"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                          </a>
+                          <button
+                            className="text-zinc-400 hover:text-zinc-100 disabled:opacity-50"
+                            onClick={() => handleDeleteArtifact(artifact.id)}
+                            title="Delete artifact"
+                            type="button"
+                            disabled={deletingArtifactId === artifact.id}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
