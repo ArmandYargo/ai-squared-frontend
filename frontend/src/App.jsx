@@ -524,14 +524,11 @@ export default function AISquaredChatUIStarter() {
       }
 
       let messageForBackend = trimmed;
-      if (!messageForBackend && uploadedFiles.length > 0) {
-        messageForBackend = uploadedFiles[0].server_path;
-      }
 
       if (!messageForBackend) {
         setAttachments([]);
         setInput("");
-        setStatus("Files uploaded. Add a message or continue the wizard.");
+        setStatus("Files uploaded. Ask a question about the document when ready.");
         return;
       }
 
