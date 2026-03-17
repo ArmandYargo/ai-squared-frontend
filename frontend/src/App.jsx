@@ -19,6 +19,7 @@ import {
   Check,
   X,
   Download,
+  FolderDown,
   BarChart3,
   TrendingUp,
   DollarSign,
@@ -1521,6 +1522,18 @@ export default function AISquaredChatUIStarter() {
                         </div>
                       </div>
                     ))}
+
+                    {artifacts.some((a) => a.available) && (
+                      <a
+                        href={`${API_BASE}/api/conversations/${encodeURIComponent(conversationId)}/artifacts/download-all?browser_id=${encodeURIComponent(browserId || "")}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center justify-center gap-2 w-full mt-2 px-3 py-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-xs font-medium transition-colors"
+                      >
+                        <FolderDown className="h-3.5 w-3.5" />
+                        Download All (.zip)
+                      </a>
+                    )}
                   </div>
                 )}
               </div>
