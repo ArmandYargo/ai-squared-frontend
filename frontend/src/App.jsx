@@ -41,7 +41,7 @@ import {
   Legend,
 } from "recharts";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
 const DEFAULT_ASSISTANT_MESSAGE =
   "Hi — I’m your AI Squared assistant. I can help with engineering workflows, RAM wizard steps, and document-based Q&A once your backend is connected.";
