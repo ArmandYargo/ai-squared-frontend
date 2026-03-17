@@ -281,7 +281,7 @@ const PLOT_ICONS = {
 
 const CHART_COLORS = ["#10b981", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
 
-function SimChart({ chartData, onBack }) {
+function SimChart({ chartData, onBack, height = 280 }) {
   if (!chartData) return null;
   const { chart_type, title, x_label, y_label, labels, datasets } = chartData;
 
@@ -311,7 +311,7 @@ function SimChart({ chartData, onBack }) {
       </div>
       <p className="text-xs font-medium text-zinc-300 mb-2">{title}</p>
       <div className="rounded-lg border border-zinc-700 bg-zinc-950 p-3">
-        <ResponsiveContainer width="100%" height={280}>
+        <ResponsiveContainer width="100%" height={height}>
           {chart_type === "bar" ? (
             <BarChart data={data} margin={{ top: 5, right: 20, bottom: 40, left: 20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
@@ -373,15 +373,13 @@ function SimChart({ chartData, onBack }) {
   );
 }
 
-function SimPlotMenu({ plots, conversationId, browserId }) {
+function SimPlotMenu({ plots, conversationId, browserId, onShowPlot }) {
   const [loading, setLoading] = useState(null);
-  const [chartData, setChartData] = useState(null);
   const [error, setError] = useState(null);
 
   const fetchPlot = async (plotId) => {
     setLoading(plotId);
     setError(null);
-    setChartData(null);
     try {
       const res = await fetch(
         `${API_BASE}/api/plots/${encodeURIComponent(conversationId)}/${plotId}?browser_id=${encodeURIComponent(browserId || "")}`,
@@ -392,17 +390,13 @@ function SimPlotMenu({ plots, conversationId, browserId }) {
         throw new Error(detail.detail || `HTTP ${res.status}`);
       }
       const data = await res.json();
-      setChartData(data);
+      if (onShowPlot) onShowPlot(data);
     } catch (err) {
       setError(err.message || "Failed to load plot data");
     } finally {
       setLoading(null);
     }
   };
-
-  if (chartData) {
-    return <SimChart chartData={chartData} onBack={() => setChartData(null)} />;
-  }
 
   return (
     <div className="mt-2 mb-1">
@@ -497,6 +491,9 @@ function LoginScreen({ password, setPassword, loginError, isLoggingIn, onLogin }
 
 export default function AISquaredChatUIStarter() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(288);
+  const sidebarDragging = useRef(false);
+  const [activePlot, setActivePlot] = useState(null);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState(buildDefaultMessages());
 
@@ -553,6 +550,18 @@ export default function AISquaredChatUIStarter() {
   const appendMessage = (msg) => {
     setMessages((prev) => [...prev, msg]);
   };
+
+  useEffect(() => {
+    const onMouseMove = (e) => {
+      if (!sidebarDragging.current) return;
+      const w = Math.max(180, Math.min(600, e.clientX));
+      setSidebarWidth(w);
+    };
+    const onMouseUp = () => { sidebarDragging.current = false; document.body.style.cursor = ""; document.body.style.userSelect = ""; };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => { window.removeEventListener("mousemove", onMouseMove); window.removeEventListener("mouseup", onMouseUp); };
+  }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1296,9 +1305,8 @@ export default function AISquaredChatUIStarter() {
   return (
     <div className="h-screen w-full bg-zinc-950 text-zinc-100 flex">
       <aside
-        className={`${
-          sidebarOpen ? "w-72" : "w-0"
-        } transition-all duration-200 border-r border-zinc-800 overflow-hidden bg-zinc-900/70 hidden md:flex md:flex-col`}
+        style={sidebarOpen ? { width: sidebarWidth, minWidth: 180, maxWidth: 600 } : { width: 0 }}
+        className="transition-all duration-200 border-r border-zinc-800 overflow-hidden bg-zinc-900/70 hidden md:flex md:flex-col relative"
       >
         <div className="p-3 border-b border-zinc-800">
           <button
@@ -1457,6 +1465,12 @@ export default function AISquaredChatUIStarter() {
             <LogOut className="h-4 w-4" />
           </button>
         </div>
+        {sidebarOpen && (
+          <div
+            className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-emerald-500/30 active:bg-emerald-500/50 transition-colors z-10"
+            onMouseDown={(e) => { e.preventDefault(); sidebarDragging.current = true; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none"; }}
+          />
+        )}
       </aside>
 
       <main className="flex-1 flex flex-col min-w-0">
@@ -1603,6 +1617,7 @@ export default function AISquaredChatUIStarter() {
                       plots={m.wizard_ui.plots}
                       conversationId={conversationId}
                       browserId={browserId}
+                      onShowPlot={(data) => setActivePlot(data)}
                     />
                   )}
                   <div
@@ -1685,13 +1700,47 @@ export default function AISquaredChatUIStarter() {
                     }
 
                     if (simProgress?.step === "classification") {
+                      const SUBSTEP_LABELS = {
+                        starting: "Starting classification pipeline",
+                        ingest: "Step 2/7 — Ingesting workbook",
+                        readiness: "Step 3/7 — Assessing data readiness",
+                        date_filter: "Step 4/7 — Applying date filter",
+                        categories: "Step 5/7 — Preparing categories",
+                        classify: "Step 6/7 — Classifying work-orders",
+                        build_input: "Step 7/7 — Building input sheet",
+                      };
+                      const substep = simProgress.substep || "";
+                      const substepLabel = SUBSTEP_LABELS[substep] || simProgress.message || "Processing...";
+                      const substepKeys = Object.keys(SUBSTEP_LABELS);
+                      const substepIdx = Math.max(0, substepKeys.indexOf(substep));
+                      const substepPct = Math.round(((substepIdx + 1) / substepKeys.length) * 100);
+
+                      return (
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium text-zinc-200">
+                            Building RAM input sheet{sendingElapsed > 0 ? ` (${sendingElapsed}s)` : ""}…
+                          </p>
+                          <div className="w-full bg-zinc-700 rounded-full h-1.5">
+                            <div
+                              className="bg-emerald-500 h-1.5 rounded-full transition-all duration-700"
+                              style={{ width: `${substepPct}%` }}
+                            />
+                          </div>
+                          <p className="text-[11px] text-zinc-400">{substepLabel}</p>
+                          {estLabel && <p className="text-[11px] text-emerald-500/70">{estLabel}</p>}
+                          <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
+                        </div>
+                      );
+                    }
+
+                    if (simProgress?.step === "aggregation") {
                       return (
                         <div className="space-y-1">
                           <p className="text-sm font-medium text-zinc-200">
-                            Classifying work-order data{sendingElapsed > 0 ? ` (${sendingElapsed}s)` : ""}…
+                            Aggregating simulation data{sendingElapsed > 0 ? ` (${sendingElapsed}s)` : ""}…
                           </p>
                           <p className="text-[11px] text-zinc-500">
-                            {simProgress.message || "Classifying rows and building input sheet..."}
+                            Simulation 100% complete — now aggregating results across components and time periods.
                           </p>
                           {estLabel && <p className="text-[11px] text-emerald-500/70">{estLabel}</p>}
                           <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
@@ -1839,6 +1888,25 @@ export default function AISquaredChatUIStarter() {
           </div>
         </div>
       </main>
+
+      {activePlot && (
+        <aside className="w-[480px] border-l border-zinc-800 bg-zinc-950 hidden lg:flex flex-col">
+          <div className="h-14 border-b border-zinc-800 px-4 flex items-center justify-between shrink-0">
+            <span className="text-sm font-medium text-zinc-200 truncate">{activePlot.title}</span>
+            <button
+              onClick={() => setActivePlot(null)}
+              className="rounded-lg p-1.5 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 transition-colors"
+              title="Close plot"
+              type="button"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4">
+            <SimChart chartData={activePlot} onBack={() => setActivePlot(null)} height={450} />
+          </div>
+        </aside>
+      )}
     </div>
   );
 }
