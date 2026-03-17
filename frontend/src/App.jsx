@@ -148,6 +148,107 @@ function MaintenanceTable({ categories, practices, legend, editable, onSave }) {
   );
 }
 
+function InputSheetEditor({ sheets, editable, onSave }) {
+  const sheetNames = React.useMemo(() => Object.keys(sheets || {}), [sheets]);
+  const [activeTab, setActiveTab] = React.useState(sheetNames[0] || "");
+  const [edited, setEdited] = React.useState(() => JSON.parse(JSON.stringify(sheets || {})));
+  const [saved, setSaved] = React.useState(false);
+
+  const isEditable = editable && !saved;
+
+  const handleCellChange = (sheetName, rowIdx, col, value) => {
+    setEdited((prev) => {
+      const next = { ...prev };
+      const sheet = { ...next[sheetName] };
+      const rows = [...sheet.rows];
+      rows[rowIdx] = { ...rows[rowIdx], [col]: value };
+      sheet.rows = rows;
+      next[sheetName] = sheet;
+      return next;
+    });
+  };
+
+  const handleSave = () => {
+    setSaved(true);
+    onSave("__SHEET_SAVE__:" + JSON.stringify({ sheets: edited }));
+  };
+
+  if (!sheetNames.length) return null;
+
+  const activeSheet = edited[activeTab];
+
+  return (
+    <div className="mt-2 mb-1">
+      <div className="flex gap-1 mb-2 flex-wrap">
+        {sheetNames.map((name) => (
+          <button
+            key={name}
+            onClick={() => setActiveTab(name)}
+            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+              activeTab === name
+                ? "bg-emerald-600 text-white"
+                : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+      {activeSheet && (
+        <div className="overflow-x-auto rounded border border-zinc-700">
+          <table className="text-xs border-collapse whitespace-nowrap">
+            <thead>
+              <tr className="bg-zinc-800">
+                <th className="py-1.5 px-2 text-zinc-500 font-medium border-r border-zinc-700 text-left">#</th>
+                {activeSheet.columns.map((col) => (
+                  <th
+                    key={col}
+                    className="py-1.5 px-2 text-zinc-400 font-medium border-r border-zinc-700 text-left"
+                  >
+                    {col}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {activeSheet.rows.map((row, rowIdx) => (
+                <tr key={rowIdx} className="border-t border-zinc-800/50">
+                  <td className="py-0.5 px-2 text-zinc-600 border-r border-zinc-800">{rowIdx + 1}</td>
+                  {activeSheet.columns.map((col) => (
+                    <td key={col} className="py-0.5 px-1 border-r border-zinc-800">
+                      {isEditable ? (
+                        <input
+                          type="text"
+                          value={row[col] ?? ""}
+                          onChange={(e) => handleCellChange(activeTab, rowIdx, col, e.target.value)}
+                          className="w-full min-w-[60px] bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-xs text-zinc-200 font-mono focus:border-emerald-500 focus:outline-none"
+                        />
+                      ) : (
+                        <span className="px-1 text-zinc-300 font-mono">{String(row[col] ?? "")}</span>
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {isEditable && (
+        <button
+          onClick={handleSave}
+          className="mt-2 px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
+        >
+          Save
+        </button>
+      )}
+      {saved && (
+        <p className="mt-1 text-[11px] text-emerald-400">Saved — input sheet updated</p>
+      )}
+    </div>
+  );
+}
+
 function LoginScreen({ password, setPassword, loginError, isLoggingIn, onLogin }) {
   return (
     <div className="min-h-screen w-full bg-zinc-950 text-zinc-100 flex items-center justify-center px-4">
@@ -241,8 +342,11 @@ export default function AISquaredChatUIStarter() {
   const [loginError, setLoginError] = useState("");
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
+  const [simProgress, setSimProgress] = useState(null);
+
   const fileInputRef = useRef(null);
   const recognitionRef = useRef(null);
+  const chatEndRef = useRef(null);
 
   const filteredConversations = useMemo(() => {
     const q = chatSearch.trim().toLowerCase();
@@ -257,6 +361,35 @@ export default function AISquaredChatUIStarter() {
   const appendMessage = (msg) => {
     setMessages((prev) => [...prev, msg]);
   };
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isSending, simProgress]);
+
+  useEffect(() => {
+    if (!isSending || !conversationId) {
+      setSimProgress(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      while (!cancelled) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (cancelled) break;
+        try {
+          const res = await fetch(`${API_BASE}/api/progress/${conversationId}`, { credentials: "include" });
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.current) {
+              setSimProgress(data);
+            }
+          }
+        } catch {}
+      }
+    };
+    poll();
+    return () => { cancelled = true; setSimProgress(null); };
+  }, [isSending, conversationId]);
 
   const saveConversationId = (id) => {
     if (!id) return;
@@ -579,15 +712,26 @@ export default function AISquaredChatUIStarter() {
         setStatus(`Uploading ${attachments.length} file(s)...`);
         uploadedFiles = await uploadAttachments(attachments);
 
-        appendMessage({
-          role: "assistant",
-          text:
-            uploadedFiles.length === 1
-              ? `Uploaded: ${uploadedFiles[0].filename}`
-              : `Uploaded ${uploadedFiles.length} files successfully.`,
-          speaker: "ASSISTANT",
-          time: timeNow(),
-        });
+        const autoReply = uploadedFiles[0]?.auto_reply;
+        if (autoReply) {
+          appendMessage({
+            role: "assistant",
+            text: autoReply,
+            speaker: "WIZARD",
+            time: timeNow(),
+            wizard_ui: uploadedFiles[0]?.wizard_ui || null,
+          });
+        } else {
+          appendMessage({
+            role: "assistant",
+            text:
+              uploadedFiles.length === 1
+                ? `Uploaded: ${uploadedFiles[0].filename}`
+                : `Uploaded ${uploadedFiles.length} files successfully.`,
+            speaker: "ASSISTANT",
+            time: timeNow(),
+          });
+        }
 
         await loadConversations(browserId);
 
@@ -604,7 +748,7 @@ export default function AISquaredChatUIStarter() {
       if (!messageForBackend) {
         setAttachments([]);
         setInput("");
-        setStatus("Files uploaded. Continue the chat or wizard when ready.");
+        setStatus("Connected");
         return;
       }
 
@@ -677,7 +821,8 @@ export default function AISquaredChatUIStarter() {
   const sendMessageDirect = async (text) => {
     if (isSending || !text) return;
     setIsSending(true);
-    appendMessage({ role: "user", text, speaker: "USER", time: timeNow() });
+    const displayText = text.startsWith("__SHEET_SAVE__:") ? "Saved input sheet edits" : text;
+    appendMessage({ role: "user", text: displayText, speaker: "USER", time: timeNow() });
     try {
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
@@ -1211,6 +1356,13 @@ export default function AISquaredChatUIStarter() {
                       onSave={sendMessageDirect}
                     />
                   )}
+                  {m.wizard_ui && m.wizard_ui.type === "input_sheet_editor" && (
+                    <InputSheetEditor
+                      sheets={m.wizard_ui.sheets}
+                      editable={!!m.wizard_ui.editable}
+                      onSave={sendMessageDirect}
+                    />
+                  )}
                   <div
                     className={`mt-2 text-[11px] ${
                       m.role === "user" ? "text-zinc-600" : "text-zinc-500"
@@ -1234,12 +1386,30 @@ export default function AISquaredChatUIStarter() {
                   <Bot className="h-4 w-4" />
                 </div>
                 <div className="max-w-[88%] rounded-2xl px-4 py-3 border bg-zinc-900 border-zinc-800">
-                  <p className="text-sm leading-6 text-zinc-400">
-                    {isOpeningConversation ? "Loading saved chat..." : "Working…"}
-                  </p>
+                  {isOpeningConversation ? (
+                    <p className="text-sm leading-6 text-zinc-400">Loading saved chat...</p>
+                  ) : simProgress && simProgress.current ? (
+                    <div className="space-y-1.5">
+                      <p className="text-sm leading-6 text-zinc-300">
+                        Simulation {simProgress.current}/{simProgress.total}
+                      </p>
+                      <div className="w-full bg-zinc-700 rounded-full h-2">
+                        <div
+                          className="bg-emerald-500 h-2 rounded-full transition-all duration-500"
+                          style={{ width: `${(simProgress.current / simProgress.total) * 100}%` }}
+                        />
+                      </div>
+                      <p className="text-[11px] text-zinc-500">
+                        {simProgress.avg_per_sim}s/sim &middot; ETA {simProgress.eta_seconds}s
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-sm leading-6 text-zinc-400">Working…</p>
+                  )}
                 </div>
               </div>
             )}
+            <div ref={chatEndRef} />
           </div>
         </div>
 
