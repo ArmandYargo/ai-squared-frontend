@@ -958,16 +958,27 @@ export default function AISquaredChatUIStarter() {
       const activeConversationId =
         uploadedFiles[0]?.conversation_id || conversationId;
 
-      const res = await fetch(`${API_BASE}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          message: messageForBackend,
-          conversation_id: activeConversationId,
-          browser_id: browserId,
-        }),
-      });
+      const chatAbort = new AbortController();
+      const chatTimeout = setTimeout(() => chatAbort.abort(), 180_000);
+      let res;
+      try {
+        res = await fetch(`${API_BASE}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          signal: chatAbort.signal,
+          body: JSON.stringify({
+            message: messageForBackend,
+            conversation_id: activeConversationId,
+            browser_id: browserId,
+          }),
+        });
+      } catch (fetchErr) {
+        clearTimeout(chatTimeout);
+        if (fetchErr.name === "AbortError") throw new Error("Request timed out after 3 minutes. The backend may still be processing — try refreshing the chat.");
+        throw fetchErr;
+      }
+      clearTimeout(chatTimeout);
 
       if (res.status === 401) {
         setIsAuthenticated(false);
@@ -1025,16 +1036,27 @@ export default function AISquaredChatUIStarter() {
     const displayText = text.startsWith("__SHEET_SAVE__:") ? "Saved input sheet edits" : text;
     appendMessage({ role: "user", text: displayText, speaker: "USER", time: timeNow() });
     try {
-      const res = await fetch(`${API_BASE}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          message: text,
-          conversation_id: conversationId,
-          browser_id: browserId,
-        }),
-      });
+      const chatAbort = new AbortController();
+      const chatTimeout = setTimeout(() => chatAbort.abort(), 180_000);
+      let res;
+      try {
+        res = await fetch(`${API_BASE}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          signal: chatAbort.signal,
+          body: JSON.stringify({
+            message: text,
+            conversation_id: conversationId,
+            browser_id: browserId,
+          }),
+        });
+      } catch (fetchErr) {
+        clearTimeout(chatTimeout);
+        if (fetchErr.name === "AbortError") throw new Error("Request timed out after 3 minutes. The backend may still be processing — try refreshing the chat.");
+        throw fetchErr;
+      }
+      clearTimeout(chatTimeout);
       if (res.status === 401) { setIsAuthenticated(false); throw new Error("Session expired."); }
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || "Backend error"); }
       const data = await res.json();
@@ -1606,50 +1628,107 @@ export default function AISquaredChatUIStarter() {
                   <Bot className="h-4 w-4" />
                 </div>
                 <div className="max-w-[88%] rounded-2xl px-4 py-3 border bg-zinc-900 border-zinc-800">
-                  {isOpeningConversation ? (
-                    <p className="text-sm leading-6 text-zinc-400">Loading saved chat...</p>
-                  ) : simProgress && simProgress.current && simProgress.step === "simulation" ? (
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium text-zinc-200">
-                        Running RAM Simulation — {simProgress.current}/{simProgress.total}
-                      </p>
-                      <div className="w-full bg-zinc-700 rounded-full h-2.5">
-                        <div
-                          className="bg-emerald-500 h-2.5 rounded-full transition-all duration-500"
-                          style={{ width: `${Math.round((simProgress.current / simProgress.total) * 100)}%` }}
-                        />
+                  {(() => {
+                    const est = simProgress?.est_seconds;
+                    const estLabel = est ? `Predicted: ~${est}s` : null;
+
+                    if (isOpeningConversation) {
+                      return <p className="text-sm leading-6 text-zinc-400">Loading saved chat...</p>;
+                    }
+
+                    if (simProgress?.step === "simulation" && simProgress.current) {
+                      return (
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium text-zinc-200">
+                            Running RAM Simulation — {simProgress.current}/{simProgress.total}
+                          </p>
+                          <div className="w-full bg-zinc-700 rounded-full h-2.5">
+                            <div
+                              className="bg-emerald-500 h-2.5 rounded-full transition-all duration-500"
+                              style={{ width: `${Math.round((simProgress.current / simProgress.total) * 100)}%` }}
+                            />
+                          </div>
+                          <div className="flex justify-between text-[11px] text-zinc-400">
+                            <span>{Math.round((simProgress.current / simProgress.total) * 100)}%</span>
+                            <span>{simProgress.avg_per_sim}s/sim</span>
+                            <span>ETA {simProgress.eta_seconds}s</span>
+                          </div>
+                          <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
+                        </div>
+                      );
+                    }
+
+                    if (simProgress?.step === "simulation" && !simProgress.current) {
+                      return (
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium text-zinc-200">Starting RAM simulation</p>
+                          <p className="text-[11px] text-zinc-500">Initialising Monte Carlo engine...</p>
+                          {estLabel && <p className="text-[11px] text-emerald-500/70">{estLabel}</p>}
+                          <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
+                        </div>
+                      );
+                    }
+
+                    if (simProgress?.step === "readiness") {
+                      return (
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium text-zinc-200">
+                            Checking data readiness{sendingElapsed > 0 ? ` (${sendingElapsed}s)` : ""}…
+                          </p>
+                          <p className="text-[11px] text-zinc-500">
+                            {simProgress.message || "Ingesting CMMS data and validating columns..."}
+                          </p>
+                          {estLabel && <p className="text-[11px] text-emerald-500/70">{estLabel}</p>}
+                          <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
+                        </div>
+                      );
+                    }
+
+                    if (simProgress?.step === "classification") {
+                      return (
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium text-zinc-200">
+                            Classifying work-order data{sendingElapsed > 0 ? ` (${sendingElapsed}s)` : ""}…
+                          </p>
+                          <p className="text-[11px] text-zinc-500">
+                            {simProgress.message || "Classifying rows and building input sheet..."}
+                          </p>
+                          {estLabel && <p className="text-[11px] text-emerald-500/70">{estLabel}</p>}
+                          <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
+                        </div>
+                      );
+                    }
+
+                    if (simProgress?.step === "done") {
+                      return (
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium text-zinc-200">
+                            Saving results{sendingElapsed > 0 ? ` (${sendingElapsed}s)` : ""}…
+                          </p>
+                          <p className="text-[11px] text-zinc-500">Simulation finished — writing artifacts to database.</p>
+                          {estLabel && <p className="text-[11px] text-emerald-500/70">{estLabel}</p>}
+                          <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-1">
+                        <p className="text-sm leading-6 text-zinc-400">
+                          Working{sendingElapsed > 0 ? ` (${sendingElapsed}s)` : ""}…
+                        </p>
+                        {sendingElapsed >= 3 && (
+                          <p className="text-[11px] text-zinc-500">
+                            {sendingElapsed < 10
+                              ? "Processing your request..."
+                              : sendingElapsed < 30
+                                ? "Still working — this may take a moment on the free server."
+                                : `Taking longer than expected (${sendingElapsed}s). Server may be under load.`}
+                          </p>
+                        )}
                       </div>
-                      <div className="flex justify-between text-[11px] text-zinc-400">
-                        <span>{Math.round((simProgress.current / simProgress.total) * 100)}% complete</span>
-                        <span>{simProgress.avg_per_sim}s/sim</span>
-                        <span>ETA {simProgress.eta_seconds}s</span>
-                      </div>
-                      <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
-                    </div>
-                  ) : simProgress && simProgress.step === "classification" ? (
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium text-zinc-200">Classifying work-order data</p>
-                      <p className="text-[11px] text-zinc-500">
-                        {simProgress.message || "This typically takes ~2s per data row."}
-                      </p>
-                      <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
-                    </div>
-                  ) : simProgress && simProgress.step === "simulation" && !simProgress.current ? (
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium text-zinc-200">Starting RAM simulation</p>
-                      <p className="text-[11px] text-zinc-500">Initialising Monte Carlo engine...</p>
-                      <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-1">
-                      <p className="text-sm leading-6 text-zinc-400">
-                        Working{sendingElapsed > 0 ? ` (${sendingElapsed}s)` : ""}…
-                      </p>
-                      {sendingElapsed >= 5 && (
-                        <p className="text-[11px] text-zinc-500">Processing — this may take a while for large datasets.</p>
-                      )}
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               </div>
             )}
