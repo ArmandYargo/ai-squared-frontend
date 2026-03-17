@@ -97,25 +97,32 @@ function buildDefaultMessages(text = DEFAULT_ASSISTANT_MESSAGE) {
 const TYPEWRITER_CHARS_PER_TICK = 6;
 const TYPEWRITER_INTERVAL_MS = 12;
 
-function TypewriterText({ text, animate }) {
+function TypewriterText({ text, animate, scrollRef }) {
   const [displayed, setDisplayed] = useState(animate ? "" : text);
   const idxRef = useRef(0);
+  const tickCount = useRef(0);
 
   useEffect(() => {
     if (!animate) { setDisplayed(text); return; }
     idxRef.current = 0;
+    tickCount.current = 0;
     setDisplayed("");
     const id = setInterval(() => {
       idxRef.current += TYPEWRITER_CHARS_PER_TICK;
+      tickCount.current += 1;
       if (idxRef.current >= text.length) {
         setDisplayed(text);
         clearInterval(id);
+        scrollRef?.current?.scrollIntoView({ behavior: "smooth" });
       } else {
         setDisplayed(text.slice(0, idxRef.current));
+        if (tickCount.current % 8 === 0) {
+          scrollRef?.current?.scrollIntoView({ behavior: "smooth" });
+        }
       }
     }, TYPEWRITER_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [text, animate]);
+  }, [text, animate, scrollRef]);
 
   return <span>{displayed}</span>;
 }
@@ -1641,6 +1648,7 @@ export default function AISquaredChatUIStarter() {
                     <TypewriterText
                       text={m.text}
                       animate={m.role === "assistant" && i === lastAnimatedIdx.current}
+                      scrollRef={chatEndRef}
                     />
                   </p>
                   {m.wizard_ui && m.wizard_ui.type === "maintenance_table" && (
