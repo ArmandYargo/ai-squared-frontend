@@ -73,6 +73,81 @@ function buildDefaultMessages(text = DEFAULT_ASSISTANT_MESSAGE) {
   ];
 }
 
+function MaintenanceTable({ categories, practices, legend, editable, onSave }) {
+  const [values, setValues] = React.useState(() => {
+    const init = {};
+    categories.forEach((cat) => {
+      init[cat] = practices[cat] ?? 0;
+    });
+    return init;
+  });
+  const [saved, setSaved] = React.useState(false);
+
+  const handleChange = (cat, val) => {
+    setValues((prev) => ({ ...prev, [cat]: parseInt(val, 10) }));
+  };
+
+  const handleSave = () => {
+    const parts = categories.map((cat, i) => `${i + 1}:${values[cat]}`);
+    setSaved(true);
+    onSave(parts.join(", "));
+  };
+
+  const isEditable = editable && !saved;
+
+  return (
+    <div className="mt-2 mb-1">
+      <table className="w-full text-xs border-collapse">
+        <thead>
+          <tr className="border-b border-zinc-700">
+            <th className="text-left py-1.5 px-2 text-zinc-400 font-medium">#</th>
+            <th className="text-left py-1.5 px-2 text-zinc-400 font-medium">Component</th>
+            <th className="text-left py-1.5 px-2 text-zinc-400 font-medium">Maintenance Practice</th>
+          </tr>
+        </thead>
+        <tbody>
+          {categories.map((cat, idx) => (
+            <tr key={cat} className="border-b border-zinc-800/50">
+              <td className="py-1 px-2 text-zinc-500">{idx + 1}</td>
+              <td className="py-1 px-2 text-zinc-300">{cat}</td>
+              <td className="py-1 px-2">
+                {isEditable ? (
+                  <select
+                    value={values[cat]}
+                    onChange={(e) => handleChange(cat, e.target.value)}
+                    className="bg-zinc-800 border border-zinc-600 rounded px-1.5 py-0.5 text-xs text-zinc-200 focus:border-emerald-500 focus:outline-none"
+                  >
+                    {Object.entries(legend).map(([code, name]) => (
+                      <option key={code} value={code}>
+                        {code} – {name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="text-zinc-400">
+                    {values[cat]} – {legend[String(values[cat])] || "Unknown"}
+                  </span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {isEditable && (
+        <button
+          onClick={handleSave}
+          className="mt-2 px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
+        >
+          Save
+        </button>
+      )}
+      {saved && (
+        <p className="mt-1 text-[11px] text-emerald-400">Saved</p>
+      )}
+    </div>
+  );
+}
+
 function LoginScreen({ password, setPassword, loginError, isLoggingIn, onLogin }) {
   return (
     <div className="min-h-screen w-full bg-zinc-950 text-zinc-100 flex items-center justify-center px-4">
@@ -570,6 +645,7 @@ export default function AISquaredChatUIStarter() {
         text: data.reply || "(No response)",
         speaker: data.speaker || "ASSISTANT",
         time: timeNow(),
+        wizard_ui: data.wizard_ui || null,
       });
 
       setStatus(
@@ -592,6 +668,41 @@ export default function AISquaredChatUIStarter() {
         speaker: "ASSISTANT",
         time: timeNow(),
       });
+      setStatus("Error talking to backend.");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const sendMessageDirect = async (text) => {
+    if (isSending || !text) return;
+    setIsSending(true);
+    appendMessage({ role: "user", text, speaker: "USER", time: timeNow() });
+    try {
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          message: text,
+          conversation_id: conversationId,
+          browser_id: browserId,
+        }),
+      });
+      if (res.status === 401) { setIsAuthenticated(false); throw new Error("Session expired."); }
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || "Backend error"); }
+      const data = await res.json();
+      if (data.conversation_id) saveConversationId(data.conversation_id);
+      appendMessage({
+        role: "assistant",
+        text: data.reply || "(No response)",
+        speaker: data.speaker || "ASSISTANT",
+        time: timeNow(),
+        wizard_ui: data.wizard_ui || null,
+      });
+      setStatus(data.conversation_id ? `Connected • chat ${String(data.conversation_id).slice(0, 8)}...` : "Connected");
+    } catch (err) {
+      appendMessage({ role: "assistant", text: `⚠️ ${err.message || "Something went wrong."}`, speaker: "ASSISTANT", time: timeNow() });
       setStatus("Error talking to backend.");
     } finally {
       setIsSending(false);
@@ -1091,6 +1202,15 @@ export default function AISquaredChatUIStarter() {
                   }`}
                 >
                   <p className="text-sm leading-6 whitespace-pre-wrap">{m.text}</p>
+                  {m.wizard_ui && m.wizard_ui.type === "maintenance_table" && (
+                    <MaintenanceTable
+                      categories={m.wizard_ui.categories}
+                      practices={m.wizard_ui.practices}
+                      legend={m.wizard_ui.legend}
+                      editable={!!m.wizard_ui.editable}
+                      onSave={sendMessageDirect}
+                    />
+                  )}
                   <div
                     className={`mt-2 text-[11px] ${
                       m.role === "user" ? "text-zinc-600" : "text-zinc-500"
