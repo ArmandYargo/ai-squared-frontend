@@ -494,6 +494,8 @@ export default function AISquaredChatUIStarter() {
   const [sidebarWidth, setSidebarWidth] = useState(288);
   const sidebarDragging = useRef(false);
   const [activePlot, setActivePlot] = useState(null);
+  const [plotPanelWidth, setPlotPanelWidth] = useState(480);
+  const plotPanelDragging = useRef(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState(buildDefaultMessages());
 
@@ -553,11 +555,19 @@ export default function AISquaredChatUIStarter() {
 
   useEffect(() => {
     const onMouseMove = (e) => {
-      if (!sidebarDragging.current) return;
-      const w = Math.max(180, Math.min(600, e.clientX));
-      setSidebarWidth(w);
+      if (sidebarDragging.current) {
+        setSidebarWidth(Math.max(180, Math.min(600, e.clientX)));
+      } else if (plotPanelDragging.current) {
+        const fromRight = window.innerWidth - e.clientX;
+        setPlotPanelWidth(Math.max(320, Math.min(900, fromRight)));
+      }
     };
-    const onMouseUp = () => { sidebarDragging.current = false; document.body.style.cursor = ""; document.body.style.userSelect = ""; };
+    const onMouseUp = () => {
+      sidebarDragging.current = false;
+      plotPanelDragging.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
     return () => { window.removeEventListener("mousemove", onMouseMove); window.removeEventListener("mouseup", onMouseUp); };
@@ -1890,7 +1900,14 @@ export default function AISquaredChatUIStarter() {
       </main>
 
       {activePlot && (
-        <aside className="w-[480px] border-l border-zinc-800 bg-zinc-950 hidden lg:flex flex-col">
+        <aside
+          style={{ width: plotPanelWidth, minWidth: 320, maxWidth: 900 }}
+          className="border-l border-zinc-800 bg-zinc-950 hidden lg:flex flex-col relative"
+        >
+          <div
+            className="absolute top-0 left-0 w-1.5 h-full cursor-col-resize hover:bg-emerald-500/30 active:bg-emerald-500/50 transition-colors z-10"
+            onMouseDown={(e) => { e.preventDefault(); plotPanelDragging.current = true; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none"; }}
+          />
           <div className="h-14 border-b border-zinc-800 px-4 flex items-center justify-between shrink-0">
             <span className="text-sm font-medium text-zinc-200 truncate">{activePlot.title}</span>
             <button
@@ -1903,7 +1920,7 @@ export default function AISquaredChatUIStarter() {
             </button>
           </div>
           <div className="flex-1 overflow-y-auto p-4">
-            <SimChart chartData={activePlot} onBack={() => setActivePlot(null)} height={450} />
+            <SimChart chartData={activePlot} onBack={() => setActivePlot(null)} height={Math.max(350, plotPanelWidth * 0.75)} />
           </div>
         </aside>
       )}
