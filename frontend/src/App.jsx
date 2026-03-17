@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   PanelLeft,
   Plus,
@@ -92,6 +92,32 @@ function buildDefaultMessages(text = DEFAULT_ASSISTANT_MESSAGE) {
       time: timeNow(),
     },
   ];
+}
+
+const TYPEWRITER_CHARS_PER_TICK = 6;
+const TYPEWRITER_INTERVAL_MS = 12;
+
+function TypewriterText({ text, animate }) {
+  const [displayed, setDisplayed] = useState(animate ? "" : text);
+  const idxRef = useRef(0);
+
+  useEffect(() => {
+    if (!animate) { setDisplayed(text); return; }
+    idxRef.current = 0;
+    setDisplayed("");
+    const id = setInterval(() => {
+      idxRef.current += TYPEWRITER_CHARS_PER_TICK;
+      if (idxRef.current >= text.length) {
+        setDisplayed(text);
+        clearInterval(id);
+      } else {
+        setDisplayed(text.slice(0, idxRef.current));
+      }
+    }, TYPEWRITER_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [text, animate]);
+
+  return <span>{displayed}</span>;
 }
 
 function MaintenanceTable({ categories, practices, legend, editable, onSave }) {
@@ -549,9 +575,15 @@ export default function AISquaredChatUIStarter() {
     });
   }, [chatSearch, conversations]);
 
-  const appendMessage = (msg) => {
-    setMessages((prev) => [...prev, msg]);
-  };
+  const lastAnimatedIdx = useRef(-1);
+
+  const appendMessage = useCallback((msg) => {
+    setMessages((prev) => {
+      const nextIdx = prev.length;
+      if (msg.role === "assistant") lastAnimatedIdx.current = nextIdx;
+      return [...prev, msg];
+    });
+  }, []);
 
   useEffect(() => {
     const onMouseMove = (e) => {
@@ -1605,7 +1637,12 @@ export default function AISquaredChatUIStarter() {
                       : "bg-zinc-900 border-zinc-800"
                   }`}
                 >
-                  <p className="text-sm leading-6 whitespace-pre-wrap">{m.text}</p>
+                  <p className="text-sm leading-6 whitespace-pre-wrap">
+                    <TypewriterText
+                      text={m.text}
+                      animate={m.role === "assistant" && i === lastAnimatedIdx.current}
+                    />
+                  </p>
                   {m.wizard_ui && m.wizard_ui.type === "maintenance_table" && (
                     <MaintenanceTable
                       categories={m.wizard_ui.categories}
