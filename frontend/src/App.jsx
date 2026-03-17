@@ -1781,7 +1781,7 @@ export default function AISquaredChatUIStarter() {
                             {sendingElapsed < 10
                               ? "Processing your request..."
                               : sendingElapsed < 30
-                                ? "Still working — this may take a moment on the free server."
+                                ? "Still working — this may take a moment."
                                 : `Taking longer than expected (${sendingElapsed}s). Server may be under load.`}
                           </p>
                         )}
