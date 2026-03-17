@@ -375,8 +375,6 @@ export default function AISquaredChatUIStarter() {
     let cancelled = false;
     const poll = async () => {
       while (!cancelled) {
-        await new Promise((r) => setTimeout(r, 1500));
-        if (cancelled) break;
         try {
           const res = await fetch(`${API_BASE}/api/progress/${conversationId}`, { credentials: "include" });
           if (res.ok) {
@@ -386,6 +384,7 @@ export default function AISquaredChatUIStarter() {
             }
           }
         } catch {}
+        await new Promise((r) => setTimeout(r, 750));
       }
     };
     poll();
