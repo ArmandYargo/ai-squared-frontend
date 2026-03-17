@@ -580,7 +580,7 @@ export default function AISquaredChatUIStarter() {
           const res = await fetch(`${API_BASE}/api/progress/${conversationId}`, { credentials: "include" });
           if (res.ok) {
             const data = await res.json();
-            if (data && typeof data.current === "number" && data.current > 0) {
+            if (data && (data.step || (typeof data.current === "number" && data.current > 0))) {
               setSimProgress(data);
             }
           }
@@ -1608,10 +1608,10 @@ export default function AISquaredChatUIStarter() {
                 <div className="max-w-[88%] rounded-2xl px-4 py-3 border bg-zinc-900 border-zinc-800">
                   {isOpeningConversation ? (
                     <p className="text-sm leading-6 text-zinc-400">Loading saved chat...</p>
-                  ) : simProgress && simProgress.current ? (
+                  ) : simProgress && simProgress.current && simProgress.step === "simulation" ? (
                     <div className="space-y-2">
                       <p className="text-sm font-medium text-zinc-200">
-                        Simulation {simProgress.current}/{simProgress.total}
+                        Running RAM Simulation — {simProgress.current}/{simProgress.total}
                       </p>
                       <div className="w-full bg-zinc-700 rounded-full h-2.5">
                         <div
@@ -1626,13 +1626,27 @@ export default function AISquaredChatUIStarter() {
                       </div>
                       <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
                     </div>
+                  ) : simProgress && simProgress.step === "classification" ? (
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium text-zinc-200">Classifying work-order data</p>
+                      <p className="text-[11px] text-zinc-500">
+                        {simProgress.message || "This typically takes ~2s per data row."}
+                      </p>
+                      <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
+                    </div>
+                  ) : simProgress && simProgress.step === "simulation" && !simProgress.current ? (
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium text-zinc-200">Starting RAM simulation</p>
+                      <p className="text-[11px] text-zinc-500">Initialising Monte Carlo engine...</p>
+                      <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
+                    </div>
                   ) : (
                     <div className="space-y-1">
                       <p className="text-sm leading-6 text-zinc-400">
                         Working{sendingElapsed > 0 ? ` (${sendingElapsed}s)` : ""}…
                       </p>
                       {sendingElapsed >= 5 && (
-                        <p className="text-[11px] text-zinc-500">Simulation in progress — this may take a while.</p>
+                        <p className="text-[11px] text-zinc-500">Processing — this may take a while for large datasets.</p>
                       )}
                     </div>
                   )}
