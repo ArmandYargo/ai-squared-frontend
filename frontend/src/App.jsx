@@ -19,7 +19,26 @@ import {
   Check,
   X,
   Download,
+  BarChart3,
+  TrendingUp,
+  DollarSign,
+  Clock,
+  AlertTriangle,
+  Loader2,
+  ArrowLeft,
 } from "lucide-react";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from "recharts";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -250,6 +269,175 @@ function InputSheetEditor({ sheets, editable, onSave }) {
   );
 }
 
+const PLOT_ICONS = {
+  availability: TrendingUp,
+  failures: AlertTriangle,
+  costs_by_component: DollarSign,
+  costs_over_time: DollarSign,
+  downtime_by_component: Clock,
+  downtime_over_time: Clock,
+};
+
+const CHART_COLORS = ["#10b981", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
+
+function SimChart({ chartData, onBack }) {
+  if (!chartData) return null;
+  const { chart_type, title, x_label, y_label, labels, datasets } = chartData;
+
+  const data = labels.map((label, i) => {
+    const point = { name: label };
+    datasets.forEach((ds, dsIdx) => {
+      point[ds.label] = ds.data[i];
+    });
+    return point;
+  });
+
+  const tickFormatter = (value) => {
+    if (typeof value === "string" && value.length > 7) return value.slice(0, 7);
+    if (typeof value === "number") return value.toLocaleString();
+    return value;
+  };
+
+  return (
+    <div className="mt-2 mb-1">
+      <div className="flex items-center gap-2 mb-2">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1 text-xs text-zinc-400 hover:text-emerald-400 transition-colors"
+        >
+          <ArrowLeft className="h-3 w-3" /> Back to plots
+        </button>
+      </div>
+      <p className="text-xs font-medium text-zinc-300 mb-2">{title}</p>
+      <div className="rounded-lg border border-zinc-700 bg-zinc-950 p-3">
+        <ResponsiveContainer width="100%" height={280}>
+          {chart_type === "bar" ? (
+            <BarChart data={data} margin={{ top: 5, right: 20, bottom: 40, left: 20 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+              <XAxis
+                dataKey="name"
+                tick={{ fontSize: 10, fill: "#a1a1aa" }}
+                angle={-45}
+                textAnchor="end"
+                interval={0}
+                height={60}
+              />
+              <YAxis tick={{ fontSize: 10, fill: "#a1a1aa" }} tickFormatter={tickFormatter} />
+              <Tooltip
+                contentStyle={{ backgroundColor: "#18181b", border: "1px solid #3f3f46", borderRadius: "8px", fontSize: "12px" }}
+                labelStyle={{ color: "#e4e4e7" }}
+                itemStyle={{ color: "#10b981" }}
+              />
+              {datasets.map((ds, idx) => (
+                <Bar key={ds.label} dataKey={ds.label} fill={CHART_COLORS[idx % CHART_COLORS.length]} radius={[4, 4, 0, 0]} />
+              ))}
+            </BarChart>
+          ) : (
+            <LineChart data={data} margin={{ top: 5, right: 20, bottom: 40, left: 20 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+              <XAxis
+                dataKey="name"
+                tick={{ fontSize: 10, fill: "#a1a1aa" }}
+                angle={-45}
+                textAnchor="end"
+                interval={Math.max(0, Math.floor(labels.length / 12) - 1)}
+                height={60}
+              />
+              <YAxis tick={{ fontSize: 10, fill: "#a1a1aa" }} tickFormatter={tickFormatter} />
+              <Tooltip
+                contentStyle={{ backgroundColor: "#18181b", border: "1px solid #3f3f46", borderRadius: "8px", fontSize: "12px" }}
+                labelStyle={{ color: "#e4e4e7" }}
+                itemStyle={{ color: "#10b981" }}
+              />
+              <Legend wrapperStyle={{ fontSize: "11px" }} />
+              {datasets.map((ds, idx) => (
+                <Line
+                  key={ds.label}
+                  type="monotone"
+                  dataKey={ds.label}
+                  stroke={CHART_COLORS[idx % CHART_COLORS.length]}
+                  strokeWidth={2}
+                  dot={labels.length <= 24}
+                  activeDot={{ r: 4 }}
+                />
+              ))}
+            </LineChart>
+          )}
+        </ResponsiveContainer>
+      </div>
+      <p className="text-[10px] text-zinc-600 mt-1">
+        {x_label && y_label ? `${x_label} vs ${y_label}` : ""}
+      </p>
+    </div>
+  );
+}
+
+function SimPlotMenu({ plots, conversationId, browserId }) {
+  const [loading, setLoading] = useState(null);
+  const [chartData, setChartData] = useState(null);
+  const [error, setError] = useState(null);
+
+  const fetchPlot = async (plotId) => {
+    setLoading(plotId);
+    setError(null);
+    setChartData(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/plots/${encodeURIComponent(conversationId)}/${plotId}?browser_id=${encodeURIComponent(browserId || "")}`,
+        { method: "GET", credentials: "include" }
+      );
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setChartData(data);
+    } catch (err) {
+      setError(err.message || "Failed to load plot data");
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  if (chartData) {
+    return <SimChart chartData={chartData} onBack={() => setChartData(null)} />;
+  }
+
+  return (
+    <div className="mt-2 mb-1">
+      <div className="grid grid-cols-2 gap-2">
+        {plots.map((plot) => {
+          const Icon = PLOT_ICONS[plot.id] || BarChart3;
+          const isLoading = loading === plot.id;
+          return (
+            <button
+              key={plot.id}
+              onClick={() => fetchPlot(plot.id)}
+              disabled={!!loading}
+              className="flex items-start gap-2 p-2.5 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 hover:border-emerald-500/40 transition-all text-left disabled:opacity-50 disabled:cursor-wait"
+            >
+              <div className="h-7 w-7 rounded-md bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                {isLoading ? (
+                  <Loader2 className="h-3.5 w-3.5 text-emerald-400 animate-spin" />
+                ) : (
+                  <Icon className="h-3.5 w-3.5 text-emerald-400" />
+                )}
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-zinc-200 leading-tight">{plot.label}</p>
+                <p className="text-[10px] text-zinc-500 leading-tight mt-0.5">{plot.description}</p>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      {error && (
+        <p className="mt-2 text-xs text-red-400">{error}</p>
+      )}
+    </div>
+  );
+}
+
 function LoginScreen({ password, setPassword, loginError, isLoggingIn, onLogin }) {
   return (
     <div className="min-h-screen w-full bg-zinc-950 text-zinc-100 flex items-center justify-center px-4">
@@ -344,6 +532,8 @@ export default function AISquaredChatUIStarter() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const [simProgress, setSimProgress] = useState(null);
+  const [sendingElapsed, setSendingElapsed] = useState(0);
+  const sendingStartRef = useRef(null);
 
   const fileInputRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -370,25 +560,35 @@ export default function AISquaredChatUIStarter() {
   useEffect(() => {
     if (!isSending || !conversationId) {
       setSimProgress(null);
+      setSendingElapsed(0);
+      sendingStartRef.current = null;
       return;
     }
+    sendingStartRef.current = Date.now();
     let cancelled = false;
+
+    const timer = setInterval(() => {
+      if (sendingStartRef.current) {
+        setSendingElapsed(Math.floor((Date.now() - sendingStartRef.current) / 1000));
+      }
+    }, 1000);
+
     const poll = async () => {
       while (!cancelled) {
         try {
           const res = await fetch(`${API_BASE}/api/progress/${conversationId}`, { credentials: "include" });
           if (res.ok) {
             const data = await res.json();
-            if (data && data.current) {
+            if (data && typeof data.current === "number" && data.current > 0) {
               setSimProgress(data);
             }
           }
         } catch {}
-        await new Promise((r) => setTimeout(r, 750));
+        await new Promise((r) => setTimeout(r, 1500));
       }
     };
     poll();
-    return () => { cancelled = true; setSimProgress(null); };
+    return () => { cancelled = true; clearInterval(timer); setSimProgress(null); setSendingElapsed(0); sendingStartRef.current = null; };
   }, [isSending, conversationId]);
 
   const saveConversationId = (id) => {
@@ -1363,6 +1563,13 @@ export default function AISquaredChatUIStarter() {
                       onSave={sendMessageDirect}
                     />
                   )}
+                  {m.wizard_ui && m.wizard_ui.type === "sim_plots_menu" && (
+                    <SimPlotMenu
+                      plots={m.wizard_ui.plots}
+                      conversationId={conversationId}
+                      browserId={browserId}
+                    />
+                  )}
                   <div
                     className={`mt-2 text-[11px] ${
                       m.role === "user" ? "text-zinc-600" : "text-zinc-500"
@@ -1389,22 +1596,32 @@ export default function AISquaredChatUIStarter() {
                   {isOpeningConversation ? (
                     <p className="text-sm leading-6 text-zinc-400">Loading saved chat...</p>
                   ) : simProgress && simProgress.current ? (
-                    <div className="space-y-1.5">
-                      <p className="text-sm leading-6 text-zinc-300">
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-zinc-200">
                         Simulation {simProgress.current}/{simProgress.total}
                       </p>
-                      <div className="w-full bg-zinc-700 rounded-full h-2">
+                      <div className="w-full bg-zinc-700 rounded-full h-2.5">
                         <div
-                          className="bg-emerald-500 h-2 rounded-full transition-all duration-500"
-                          style={{ width: `${(simProgress.current / simProgress.total) * 100}%` }}
+                          className="bg-emerald-500 h-2.5 rounded-full transition-all duration-500"
+                          style={{ width: `${Math.round((simProgress.current / simProgress.total) * 100)}%` }}
                         />
                       </div>
-                      <p className="text-[11px] text-zinc-500">
-                        {simProgress.avg_per_sim}s/sim &middot; ETA {simProgress.eta_seconds}s
-                      </p>
+                      <div className="flex justify-between text-[11px] text-zinc-400">
+                        <span>{Math.round((simProgress.current / simProgress.total) * 100)}% complete</span>
+                        <span>{simProgress.avg_per_sim}s/sim</span>
+                        <span>ETA {simProgress.eta_seconds}s</span>
+                      </div>
+                      <p className="text-[10px] text-zinc-600">Elapsed: {sendingElapsed}s</p>
                     </div>
                   ) : (
-                    <p className="text-sm leading-6 text-zinc-400">Working…</p>
+                    <div className="space-y-1">
+                      <p className="text-sm leading-6 text-zinc-400">
+                        Working{sendingElapsed > 0 ? ` (${sendingElapsed}s)` : ""}…
+                      </p>
+                      {sendingElapsed >= 5 && (
+                        <p className="text-[11px] text-zinc-500">Simulation in progress — this may take a while.</p>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
