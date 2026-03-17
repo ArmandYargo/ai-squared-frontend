@@ -59,6 +59,7 @@ function formatMessageFromApi(msg) {
           minute: "2-digit",
         })
       : timeNow(),
+    wizard_ui: msg.wizard_ui || null,
   };
 }
 
