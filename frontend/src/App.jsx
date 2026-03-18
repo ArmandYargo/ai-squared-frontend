@@ -392,6 +392,95 @@ function DEMProjectSetup({ fields, editable, onSave }) {
   );
 }
 
+function DEMScenarioSetup({ fields, editable, onSave }) {
+  const initialValues = React.useMemo(() => {
+    const out = {};
+    (fields || []).forEach((field) => {
+      out[field.key] = "";
+    });
+    return out;
+  }, [fields]);
+
+  const [values, setValues] = React.useState(initialValues);
+  const [saved, setSaved] = React.useState(false);
+
+  React.useEffect(() => {
+    setValues(initialValues);
+    setSaved(false);
+  }, [initialValues]);
+
+  const isEditable = editable !== false && !saved;
+
+  const handleChange = (key, value) => {
+    setValues((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSave = () => {
+    const payload = {
+      type: "dem_scenario_setup_submit",
+      values,
+    };
+    setSaved(true);
+    onSave(`__DEM_SCENARIO__:${JSON.stringify(payload)}`);
+  };
+
+  return (
+    <div className="mt-3 mb-1 rounded-xl border border-zinc-700 bg-zinc-950/60 p-3">
+      <div className="mb-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-emerald-400">
+          DEM Scenario Setup
+        </p>
+        <p className="text-[11px] text-zinc-500 mt-1">
+          Define the first simulation case for the DEM model.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {(fields || []).map((field) => (
+          <div key={field.key}>
+            <label className="block text-xs text-zinc-300 mb-1">
+              {field.label}
+            </label>
+
+            {field.type === "textarea" ? (
+              <textarea
+                value={values[field.key] || ""}
+                onChange={(e) => handleChange(field.key, e.target.value)}
+                disabled={!isEditable}
+                rows={3}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-emerald-500 disabled:opacity-70"
+              />
+            ) : (
+              <input
+                type="text"
+                value={values[field.key] || ""}
+                onChange={(e) => handleChange(field.key, e.target.value)}
+                disabled={!isEditable}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-emerald-500 disabled:opacity-70"
+              />
+            )}
+          </div>
+        ))}
+      </div>
+
+      {isEditable && (
+        <button
+          onClick={handleSave}
+          className="mt-4 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
+        >
+          Save DEM Scenario
+        </button>
+      )}
+
+      {saved && (
+        <p className="mt-3 text-[11px] text-emerald-400">
+          Saved — DEM scenario sent to backend
+        </p>
+      )}
+    </div>
+  );
+}
+
 const PLOT_ICONS = {
   availability: TrendingUp,
   failures: AlertTriangle,
@@ -1178,10 +1267,25 @@ export default function AISquaredChatUIStarter() {
   };
 
   const sendMessageDirect = async (text) => {
-    if (isSending || !text) return;
+	if (isSending || !text) return;
     setIsSending(true);
-    const displayText = text.startsWith("__SHEET_SAVE__:") ? "Saved input sheet edits" : text;
-    appendMessage({ role: "user", text: displayText, speaker: "USER", time: timeNow() });
+
+    let displayText = text;
+
+	if (text.startsWith("__SHEET_SAVE__:")) {
+      displayText = "Saved input sheet edits";
+    } else if (text.startsWith("__DEM_SETUP__:")) {
+      displayText = "Saved DEM setup";
+    } else if (text.startsWith("__DEM_SCENARIO__:")) {
+      displayText = "Saved DEM scenario";
+    }
+
+    appendMessage({
+      role: "user",
+      text: displayText,
+      speaker: "USER",
+      time: timeNow(),
+    });
     try {
       const chatAbort = new AbortController();
       const chatTimeout = setTimeout(() => chatAbort.abort(), 180_000);
@@ -1758,6 +1862,13 @@ export default function AISquaredChatUIStarter() {
                   )}
 				  {m.wizard_ui && m.wizard_ui.type === "dem_project_setup" && (
 					<DEMProjectSetup
+					  fields={m.wizard_ui.fields || []}
+					  editable={m.wizard_ui.editable !== false}
+					  onSave={sendMessageDirect}
+					/>
+				  )}
+				  {m.wizard_ui && m.wizard_ui.type === "dem_scenario_setup" && (
+					<DEMScenarioSetup
 					  fields={m.wizard_ui.fields || []}
 					  editable={m.wizard_ui.editable !== false}
 					  onSave={sendMessageDirect}
