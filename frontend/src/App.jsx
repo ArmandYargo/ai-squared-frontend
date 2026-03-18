@@ -44,7 +44,7 @@ import {
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
 const DEFAULT_ASSISTANT_MESSAGE =
-  "Hi — I’m your AI Squared assistant. I can help with engineering workflows, RAM wizard steps, and document-based Q&A once your backend is connected.";
+  "Hi — I’m your AI Squared assistant. What can I do you for?";
 
 function timeNow() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -298,6 +298,95 @@ function InputSheetEditor({ sheets, editable, onSave }) {
       )}
       {saved && (
         <p className="mt-1 text-[11px] text-emerald-400">Saved — input sheet updated</p>
+      )}
+    </div>
+  );
+}
+
+function DEMProjectSetup({ fields, editable, onSave }) {
+  const initialValues = React.useMemo(() => {
+    const out = {};
+    (fields || []).forEach((field) => {
+      out[field.key] = "";
+    });
+    return out;
+  }, [fields]);
+
+  const [values, setValues] = React.useState(initialValues);
+  const [saved, setSaved] = React.useState(false);
+
+  React.useEffect(() => {
+    setValues(initialValues);
+    setSaved(false);
+  }, [initialValues]);
+
+  const isEditable = editable !== false && !saved;
+
+  const handleChange = (key, value) => {
+    setValues((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSave = () => {
+    const payload = {
+      type: "dem_project_setup_submit",
+      values,
+    };
+    setSaved(true);
+    onSave(`__DEM_SETUP__:${JSON.stringify(payload)}`);
+  };
+
+  return (
+    <div className="mt-3 mb-1 rounded-xl border border-zinc-700 bg-zinc-950/60 p-3">
+      <div className="mb-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-emerald-400">
+          DEM Project Setup
+        </p>
+        <p className="text-[11px] text-zinc-500 mt-1">
+          Fill in the initial DEM project details and save to continue.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {(fields || []).map((field) => (
+          <div key={field.key}>
+            <label className="block text-xs text-zinc-300 mb-1">
+              {field.label}
+            </label>
+
+            {field.type === "textarea" ? (
+              <textarea
+                value={values[field.key] || ""}
+                onChange={(e) => handleChange(field.key, e.target.value)}
+                disabled={!isEditable}
+                rows={3}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-emerald-500 disabled:opacity-70"
+              />
+            ) : (
+              <input
+                type="text"
+                value={values[field.key] || ""}
+                onChange={(e) => handleChange(field.key, e.target.value)}
+                disabled={!isEditable}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-emerald-500 disabled:opacity-70"
+              />
+            )}
+          </div>
+        ))}
+      </div>
+
+      {isEditable && (
+        <button
+          onClick={handleSave}
+          className="mt-4 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
+        >
+          Save DEM Setup
+        </button>
+      )}
+
+      {saved && (
+        <p className="mt-3 text-[11px] text-emerald-400">
+          Saved — DEM setup sent to backend
+        </p>
       )}
     </div>
   );
@@ -1662,11 +1751,18 @@ export default function AISquaredChatUIStarter() {
                   )}
                   {m.wizard_ui && m.wizard_ui.type === "input_sheet_editor" && (
                     <InputSheetEditor
-                      sheets={m.wizard_ui.sheets}
+					  sheets={m.wizard_ui.sheets}
                       editable={!!m.wizard_ui.editable}
                       onSave={sendMessageDirect}
                     />
                   )}
+				  {m.wizard_ui && m.wizard_ui.type === "dem_project_setup" && (
+					<DEMProjectSetup
+					  fields={m.wizard_ui.fields || []}
+					  editable={m.wizard_ui.editable !== false}
+					  onSave={sendMessageDirect}
+					/>
+				  )}
                   {m.wizard_ui && m.wizard_ui.type === "sim_plots_menu" && (
                     <SimPlotMenu
                       plots={m.wizard_ui.plots}
